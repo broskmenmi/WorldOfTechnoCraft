@@ -24,6 +24,8 @@ let sim: SimWorld | null = null;
 let pendingInputs: CommandInput[] = [];
 let intervalMs = 1000 / TICK_RATE;
 let timer: ReturnType<typeof setTimeout> | null = null;
+/** Replay playback: recorded commands by tick; live inputs are ignored. */
+let replayByTick: Map<number, Command[]> | null = null;
 
 function post(msg: WorkerToHost, transfer?: Transferable[]): void {
   (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
@@ -66,18 +68,24 @@ const FOG_SEND_INTERVAL = 8;
 function tickOnce(): void {
   if (!sim) return;
   // Stamp queued inputs onto this tick — this stream is the canonical record.
-  const commands: Command[] = pendingInputs.map(
-    (input) => ({ ...input, tick: sim!.tick }) as Command,
-  );
+  // In replay mode the recorded stream IS the input.
+  const commands: Command[] = replayByTick
+    ? (replayByTick.get(sim.tick) ?? [])
+    : pendingInputs.map((input) => ({ ...input, tick: sim!.tick }) as Command);
   pendingInputs = [];
   step(sim, commands);
-  if (commands.length > 0) post({ type: 'stamped', commands });
+  if (!replayByTick && commands.length > 0) post({ type: 'stamped', commands });
   const buffer = renderSnapshot(sim);
   const resources = {
     cash: sim.cash[0]!,
     vibe: sim.vibe[0]!,
     heat: sim.heat[0]!,
     policy: sim.policy[0]!,
+    matchState: sim.matchState,
+    sunriseTick: sim.sunriseTick,
+    raidsSpawned: sim.raidsSpawned,
+    wavesSpawned: sim.wavesSpawned,
+    peakVibe: sim.peakVibe,
   };
   if (sim.tick % FOG_SEND_INTERVAL === 0) {
     const fog = sim.fog[0]!.slice().buffer;
@@ -98,6 +106,15 @@ self.onmessage = (ev: MessageEvent<HostToWorker>) => {
     case 'init': {
       if (timer !== null) clearTimeout(timer);
       sim = createSim(msg.seed, { mapId: msg.mapId });
+      replayByTick = null;
+      if (msg.replay) {
+        replayByTick = new Map();
+        for (const c of msg.replay) {
+          const list = replayByTick.get(c.tick);
+          if (list) list.push(c);
+          else replayByTick.set(c.tick, [c]);
+        }
+      }
       post({ type: 'ready' });
       loop();
       break;

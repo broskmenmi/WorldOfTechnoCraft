@@ -158,6 +158,16 @@ export interface SimWorld {
   policy: Uint8Array;
   /** Raids already triggered against player 0. */
   raidsSpawned: number;
+  /** Legion attack waves already sent. */
+  wavesSpawned: number;
+  /** Tick of the next Legion wave. */
+  nextWaveTick: number;
+  /** Match ends in victory-if-alive at this tick (Sunrise). */
+  sunriseTick: number;
+  /** 0 = running, 1 = player 0 won, 2 = player 0 lost. */
+  matchState: number;
+  /** Highest Vibe player 0 ever held (the victory score). */
+  peakVibe: number;
   /** Derived cache — deterministic function of (grid, target), never state. */
   flowCache: FlowFieldCache;
   /** Map size in fixed-point sub-units. */
@@ -167,7 +177,12 @@ export interface SimWorld {
 
 export interface SimOptions {
   mapId?: MapId;
+  /** Match length in ticks (default 10 minutes). */
+  sunriseTicks?: number;
 }
+
+/** First Legion wave arrives after this many ticks. */
+export const FIRST_WAVE_TICK = 90 * 20;
 
 export function createSim(seed: number, opts: SimOptions = {}): SimWorld {
   const mapId = opts.mapId ?? 'empty256';
@@ -188,6 +203,11 @@ export function createSim(seed: number, opts: SimOptions = {}): SimWorld {
     heat: new Int32Array(MAX_PLAYERS),
     policy,
     raidsSpawned: 0,
+    wavesSpawned: 0,
+    nextWaveTick: FIRST_WAVE_TICK,
+    sunriseTick: opts.sunriseTicks ?? 12000,
+    matchState: 0,
+    peakVibe: 0,
     flowCache: new FlowFieldCache(grid),
     mapW: grid.w * FP,
     mapH: grid.h * FP,

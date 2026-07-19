@@ -2,7 +2,7 @@
 // and the interpolation clock the renderer reads. Never extrapolates — the
 // renderer always shows a blend of the last two confirmed sim states.
 
-import { FP, type MapId } from '@wotc/sim';
+import { FP, REPLAY_VERSION, type Command, type MapId, type Replay } from '@wotc/sim';
 import {
   SNAPSHOT_HEADER,
   SNAPSHOT_STRIDE,
@@ -60,6 +60,16 @@ export class SimHost {
   vibe = 0;
   heat = 0;
   policy = 1;
+  /** Match progress (mirrors the sim). */
+  matchState = 0;
+  sunriseTick = 12000;
+  raidsSpawned = 0;
+  wavesSpawned = 0;
+  peakVibe = 0;
+  /** The canonical stamped command record (replay = seed + map + this). */
+  readonly commandLog: Command[] = [];
+  private seed = 0;
+  private mapId: MapId = 'empty256';
 
   constructor() {
     this.worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
@@ -75,15 +85,33 @@ export class SimHost {
         this.vibe = msg.vibe;
         this.heat = msg.heat;
         this.policy = msg.policy;
+        this.matchState = msg.matchState;
+        this.sunriseTick = msg.sunriseTick;
+        this.raidsSpawned = msg.raidsSpawned;
+        this.wavesSpawned = msg.wavesSpawned;
+        this.peakVibe = msg.peakVibe;
         this.flushOutbox();
         this.onSnapshot?.();
+      } else if (msg.type === 'stamped') {
+        this.commandLog.push(...msg.commands);
       }
-      // 'stamped' messages become the replay log in M9.
     };
   }
 
-  start(seed: number, mapId: MapId = 'empty256'): void {
-    this.send({ type: 'init', seed, mapId });
+  start(seed: number, mapId: MapId = 'empty256', replay?: Command[]): void {
+    this.seed = seed;
+    this.mapId = mapId;
+    this.send({ type: 'init', seed, mapId, ...(replay ? { replay } : {}) });
+  }
+
+  /** Everything needed to reproduce this match bit-for-bit. */
+  buildReplay(): Replay {
+    return {
+      version: REPLAY_VERSION,
+      seed: this.seed,
+      mapId: this.mapId,
+      commands: [...this.commandLog],
+    };
   }
 
   issue(...inputs: CommandInput[]): void {

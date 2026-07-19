@@ -20,7 +20,13 @@ export type CommandInput =
   | { playerId: number; type: 'grant'; cash: number; vibe: number };
 
 export type HostToWorker =
-  | { type: 'init'; seed: number; mapId: MapId }
+  | {
+      type: 'init';
+      seed: number;
+      mapId: MapId;
+      /** Replay playback: feed this recorded stream, ignore live inputs. */
+      replay?: Command[];
+    }
   | { type: 'commands'; inputs: CommandInput[] }
   | { type: 'setRate'; ticksPerSecond: number };
 
@@ -39,6 +45,12 @@ export type WorkerToHost =
       vibe: number;
       heat: number;
       policy: number;
+      /** Match progress. */
+      matchState: number;
+      sunriseTick: number;
+      raidsSpawned: number;
+      wavesSpawned: number;
+      peakVibe: number;
     }
   | { type: 'stamped'; commands: Command[] };
 

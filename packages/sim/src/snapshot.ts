@@ -25,14 +25,14 @@ import {
 } from './world.ts';
 
 const MAGIC = 0x574f5443; // 'WOTC'
-export const SNAPSHOT_VERSION = 4;
+export const SNAPSHOT_VERSION = 5;
 
 export function serializeSim(sim: SimWorld): ArrayBuffer {
   const n = sim.allocated;
   let fieldCount = 0;
   for (const name of COMPONENT_NAMES) fieldCount += componentFields(sim.c[name]).length;
 
-  const headerBytes = 9 * 4;
+  const headerBytes = 14 * 4;
   const playerBytes = MAX_PLAYERS * 4 * 4; // cash, vibe, heat, policy (as i32)
   const membershipBytes = COMPONENT_NAMES.length * n;
   const valueBytes = fieldCount * n * 4;
@@ -50,6 +50,11 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
   view.setInt32((o += 4), sim.mapW, true);
   view.setInt32((o += 4), sim.mapH, true);
   view.setInt32((o += 4), sim.raidsSpawned, true);
+  view.setInt32((o += 4), sim.wavesSpawned, true);
+  view.setInt32((o += 4), sim.nextWaveTick, true);
+  view.setInt32((o += 4), sim.sunriseTick, true);
+  view.setInt32((o += 4), sim.matchState, true);
+  view.setInt32((o += 4), sim.peakVibe, true);
   o += 4;
   for (let p = 0; p < MAX_PLAYERS; p++) {
     view.setInt32(o, sim.cash[p]!, true);
@@ -100,12 +105,17 @@ export function deserializeSim(buf: ArrayBuffer): SimWorld {
   if (n > CAPACITY) throw new Error('snapshot exceeds entity capacity');
   const mapId = MAP_IDS[mapIdx];
   if (!mapId) throw new Error(`snapshot references unknown map index ${mapIdx}`);
-  let o = 36;
+  let o = 56;
 
   const sim = createSim(0, { mapId });
   sim.tick = tick;
   sim.prng.s = prngState;
   sim.raidsSpawned = raidsSpawned;
+  sim.wavesSpawned = view.getInt32(36, true);
+  sim.nextWaveTick = view.getInt32(40, true);
+  sim.sunriseTick = view.getInt32(44, true);
+  sim.matchState = view.getInt32(48, true);
+  sim.peakVibe = view.getInt32(52, true);
   if (sim.mapW !== mapW || sim.mapH !== mapH) {
     throw new Error('snapshot map size mismatch — map definition changed');
   }

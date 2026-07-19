@@ -1,5 +1,5 @@
 import { query } from 'bitecs';
-import { DOOR_POLICIES, UNITS } from '@wotc/data';
+import { BUILDINGS, DOOR_POLICIES, UNITS } from '@wotc/data';
 import type { Command } from './commands.ts';
 import { clamp, dist, FP, fpCos, fpSin, idiv, TURN } from './fp.ts';
 import { fnv1aArray, fnv1aI32, FNV_OFFSET } from './hash.ts';
@@ -353,6 +353,66 @@ function economySystem(sim: SimWorld): void {
   }
 }
 
+/** Find player p's lowest-eid alive building matching a kind (or any). */
+function findBuilding(sim: SimWorld, player: number, kindId: number | null): number {
+  const { Owner, Building } = sim.c;
+  for (let eid = 1; eid <= sim.allocated; eid++) {
+    if (!isAlive(sim, eid) || Owner.player[eid] !== player) continue;
+    if (!hasComponent(sim.world, eid, Building)) continue;
+    if (kindId !== null && Building.kindId[eid] !== kindId) continue;
+    return eid;
+  }
+  return 0;
+}
+
+/**
+ * The Legion wave director: escalating attack waves from the Warcamp,
+ * attack-moving on the club. The AI does not gather resources — it IS the
+ * outside world, and the outside world is at 190 BPM. (Openly cheating,
+ * exactly like every RTS skirmish AI you grew up with.)
+ */
+function legionSystem(sim: SimWorld): void {
+  if (sim.matchState !== 0 || sim.tick !== sim.nextWaveTick) return;
+  const { Position } = sim.c;
+  const camp = findBuilding(sim, 1, null);
+  const target = findBuilding(sim, 0, null);
+  if (camp === 0 || target === 0) return;
+  sim.wavesSpawned++;
+  // Wave size and cadence escalate; composition shifts heavier over time.
+  const size = 3 + sim.wavesSpawned + idiv(sim.wavesSpawned, 2);
+  const interval = Math.max(20 * TICK_RATE, (45 - sim.wavesSpawned * 3) * TICK_RATE);
+  sim.nextWaveTick = sim.tick + interval;
+  const cx = Position.x[camp]!;
+  const cy = Position.y[camp]!;
+  for (let i = 0; i < size; i++) {
+    let kind: number = UNITS.gabber.id;
+    if (sim.wavesSpawned >= 2 && i % 3 === 1) kind = UNITS.hakken_bruiser.id;
+    if (sim.wavesSpawned >= 3 && i % 4 === 3) kind = UNITS.uptempo_screamer.id;
+    const [sx, sy] = snapWalkable(sim, cx + (i - idiv(size, 2)) * FP * 2, cy + 5 * FP);
+    const raider = spawnUnit(sim, 1, kind, sx, sy);
+    orderMove(sim, raider, Position.x[target]!, Position.y[target]!, true);
+  }
+}
+
+/** Don't evaluate win/lose before the opening commands have built the map. */
+const MATCH_GRACE_TICKS = 10 * TICK_RATE;
+
+/** Win/lose evaluation, once per second. */
+function matchSystem(sim: SimWorld): void {
+  if (sim.matchState !== 0 || sim.tick % TICK_RATE !== 0) return;
+  if (sim.tick < MATCH_GRACE_TICKS) return;
+  if (sim.vibe[0]! > sim.peakVibe) sim.peakVibe = sim.vibe[0]!;
+  const door = findBuilding(sim, 0, BUILDINGS.the_door.id);
+  if (door === 0) {
+    sim.matchState = 2; // The Door has fallen. The club is a memory.
+    return;
+  }
+  const warcamp = findBuilding(sim, 1, null);
+  if (warcamp === 0 || sim.tick >= sim.sunriseTick) {
+    sim.matchState = 1; // Sunrise. The shutters snap open to a roar.
+  }
+}
+
 /** Heat thresholds spawn raids at the north edge, attack-moving on the club. */
 function raidSystem(sim: SimWorld): void {
   if (sim.tick % TICK_RATE !== 0) return;
@@ -544,6 +604,8 @@ export function step(sim: SimWorld, commands: readonly Command[] = []): void {
   productionSystem(sim);
   economySystem(sim);
   raidSystem(sim);
+  legionSystem(sim);
+  matchSystem(sim);
   movementSystem(sim, hash);
   fogSystem(sim);
   sim.tick++;
@@ -562,6 +624,11 @@ export function checksum(sim: SimWorld): number {
   h = fnv1aI32(h, mapIndex(sim.mapId));
   h = fnv1aI32(h, sim.allocated);
   h = fnv1aI32(h, sim.raidsSpawned);
+  h = fnv1aI32(h, sim.wavesSpawned);
+  h = fnv1aI32(h, sim.nextWaveTick);
+  h = fnv1aI32(h, sim.sunriseTick);
+  h = fnv1aI32(h, sim.matchState);
+  h = fnv1aI32(h, sim.peakVibe);
   h = fnv1aArray(h, sim.cash, sim.cash.length);
   h = fnv1aArray(h, sim.vibe, sim.vibe.length);
   h = fnv1aArray(h, sim.heat, sim.heat.length);

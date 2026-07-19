@@ -61,6 +61,7 @@ export class Controls {
     private game: GameScene,
     private host: SimHost,
     private grid: WalkGrid,
+    private barks?: { unitBark(kind: number, event: 'onSelect' | 'onMove' | 'onAttack'): void },
   ) {
     this.ghost = MeshBuilder.CreateBox('ghost', { size: 1 }, game.scene);
     this.ghostMat = new StandardMaterial('ghostMat', game.scene);
@@ -122,7 +123,11 @@ export class Controls {
   private applySelection(eids: number[], additive: boolean): void {
     if (!additive) this.selected.clear();
     for (const eid of eids) this.selected.add(eid);
-    if (eids.length > 0) blipSelect();
+    if (eids.length > 0) {
+      blipSelect();
+      const v = this.views.find((view) => view.eid === eids[0] && !view.building);
+      if (v) this.barks?.unitBark(v.kind, 'onSelect');
+    }
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -255,6 +260,8 @@ export class Controls {
     }
     this.game.ping(target.x, target.y, mode ? 'attack' : 'move');
     blipOrder();
+    const v = this.views.find((view) => view.eid === unitIds[0]);
+    if (v) this.barks?.unitBark(v.kind, mode ? 'onAttack' : 'onMove');
   }
 
   private sendMove(unitIds: number[], wp: Waypoint): void {
