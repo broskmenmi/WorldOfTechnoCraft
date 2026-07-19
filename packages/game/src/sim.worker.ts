@@ -27,9 +27,9 @@ function post(msg: WorkerToHost, transfer?: Transferable[]): void {
   (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
 }
 
-/** Pack live unit state for the renderer: [tick, count, (eid,x,y,player,kind,flags)*]. */
+/** Pack live unit state for the renderer: [tick, count, (eid,x,y,player,kind,flags,hp,max)*]. */
 function renderSnapshot(s: SimWorld): ArrayBuffer {
-  const { Position, Owner, Kind, MoveTarget } = s.c;
+  const { Position, Owner, Kind, MoveTarget, Health } = s.c;
   const eids: number[] = [];
   for (let eid = 1; eid <= s.allocated; eid++) {
     if (isAlive(s, eid)) eids.push(eid);
@@ -45,9 +45,14 @@ function renderSnapshot(s: SimWorld): ArrayBuffer {
     out[o++] = Owner.player[eid]!;
     out[o++] = Kind.id[eid]!;
     out[o++] = MoveTarget.active[eid] === 1 ? 1 : 0; // FLAG_MOVING
+    out[o++] = Health.hp[eid]!;
+    out[o++] = Health.max[eid]!;
   }
   return out.buffer;
 }
+
+/** Send the local player's fog every 8 ticks (it only changes every 4). */
+const FOG_SEND_INTERVAL = 8;
 
 function tickOnce(): void {
   if (!sim) return;
@@ -59,7 +64,12 @@ function tickOnce(): void {
   step(sim, commands);
   if (commands.length > 0) post({ type: 'stamped', commands });
   const buffer = renderSnapshot(sim);
-  post({ type: 'snapshot', tick: sim.tick, buffer }, [buffer]);
+  if (sim.tick % FOG_SEND_INTERVAL === 0) {
+    const fog = sim.fog[0]!.slice().buffer;
+    post({ type: 'snapshot', tick: sim.tick, buffer, fog }, [buffer, fog]);
+  } else {
+    post({ type: 'snapshot', tick: sim.tick, buffer }, [buffer]);
+  }
 }
 
 function loop(): void {

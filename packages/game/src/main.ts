@@ -51,11 +51,16 @@ async function boot(): Promise<void> {
 
   const controls = new Controls(game, host);
   const views: UnitView[] = [];
+  let lastFog: Uint8Array | null = null;
   engine.runRenderLoop(() => {
     const now = performance.now();
     host.units(now, views);
     controls.setViews(views);
-    game.updateUnits(views, now / 1000);
+    if (host.fog && host.fog !== lastFog) {
+      lastFog = host.fog;
+      game.updateFog(host.fog);
+    }
+    game.updateUnits(views, now / 1000, host.fog);
     game.updateSelection(views, controls.selected);
     game.scene.render();
     hud.textContent =

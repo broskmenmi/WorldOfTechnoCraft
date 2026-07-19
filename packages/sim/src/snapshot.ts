@@ -23,7 +23,7 @@ import {
 } from './world.ts';
 
 const MAGIC = 0x574f5443; // 'WOTC'
-export const SNAPSHOT_VERSION = 2;
+export const SNAPSHOT_VERSION = 3;
 
 export function serializeSim(sim: SimWorld): ArrayBuffer {
   const n = sim.allocated;
@@ -33,7 +33,8 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
   const headerBytes = 8 * 4;
   const membershipBytes = COMPONENT_NAMES.length * n;
   const valueBytes = fieldCount * n * 4;
-  const buf = new ArrayBuffer(headerBytes + membershipBytes + valueBytes);
+  const fogBytes = sim.fog.reduce((s, g) => s + g.length, 0);
+  const buf = new ArrayBuffer(headerBytes + membershipBytes + valueBytes + fogBytes);
   const view = new DataView(buf);
 
   let o = 0;
@@ -61,6 +62,10 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
         o += 4;
       }
     }
+  }
+  for (const fogGrid of sim.fog) {
+    new Uint8Array(buf, o, fogGrid.length).set(fogGrid);
+    o += fogGrid.length;
   }
   return buf;
 }
@@ -109,6 +114,10 @@ export function deserializeSim(buf: ArrayBuffer): SimWorld {
         o += 4;
       }
     }
+  }
+  for (const fogGrid of sim.fog) {
+    fogGrid.set(new Uint8Array(buf, o, fogGrid.length));
+    o += fogGrid.length;
   }
   return sim;
 }

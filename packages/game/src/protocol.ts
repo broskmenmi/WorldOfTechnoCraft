@@ -23,13 +23,15 @@ export type WorkerToHost =
   | {
       type: 'snapshot';
       tick: number;
-      /** Ints: [tick, count, then per unit: eid, x, y, player, kind, flags]. */
+      /** Ints: [tick, count, then per unit: eid, x, y, player, kind, flags, hp, maxHp]. */
       buffer: ArrayBuffer;
+      /** Player-0 fog grid (0 unexplored / 1 explored / 2 visible), sent periodically. */
+      fog?: ArrayBuffer;
     }
   | { type: 'stamped'; commands: Command[] };
 
 /** Ints per unit in the render snapshot buffer. */
-export const SNAPSHOT_STRIDE = 6;
+export const SNAPSHOT_STRIDE = 8;
 export const SNAPSHOT_HEADER = 2;
 
 /** Snapshot flag bits. */

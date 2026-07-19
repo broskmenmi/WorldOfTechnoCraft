@@ -6,7 +6,7 @@ import {
   removeComponent,
   type World,
 } from 'bitecs';
-import { FP } from './fp.ts';
+import { FP, idiv } from './fp.ts';
 import type { WalkGrid } from './map/grid.ts';
 import { buildMap, type MapId } from './map/maps.ts';
 import { FlowFieldCache } from './path/flowfield.ts';
@@ -35,7 +35,28 @@ export function createComponents() {
     Velocity: { x: i32(), y: i32() },
     Owner: { player: ui8() },
     Kind: { id: ui16() },
-    MoveTarget: { x: i32(), y: i32(), active: ui8(), stuck: i32() },
+    MoveTarget: {
+      x: i32(),
+      y: i32(),
+      active: ui8(),
+      stuck: i32(),
+      /** Final destination (x/y may temporarily chase an enemy). */
+      destX: i32(),
+      destY: i32(),
+      /** Attack-move: engage enemies encountered on the way. */
+      amove: ui8(),
+    },
+    Health: { hp: i32(), max: i32() },
+    Combat: {
+      damage: i32(),
+      /** Attack range, sub-units. */
+      range: i32(),
+      /** Ticks between attacks. */
+      cooldown: i32(),
+      cdLeft: i32(),
+      /** Acquisition radius, sub-units. */
+      acquire: i32(),
+    },
     /** Debug/demo behavior: wander randomly when idle (M1/M2 scaffolding). */
     Walker: { cooldown: i32() },
   };
@@ -55,6 +76,8 @@ export const COMPONENT_NAMES = [
   'Owner',
   'Kind',
   'MoveTarget',
+  'Health',
+  'Combat',
   'Walker',
 ] as const satisfies readonly ComponentName[];
 
@@ -88,6 +111,11 @@ export interface SimWorld {
   mapId: MapId;
   /** Static walkability — derived from mapId, not checksummed/snapshotted. */
   grid: WalkGrid;
+  /**
+   * Fog of war, one grid per player: 0 unexplored, 1 explored, 2 visible.
+   * Accumulates over time, so it IS state (checksummed + snapshotted).
+   */
+  fog: Uint8Array[];
   /** Derived cache — deterministic function of (grid, target), never state. */
   flowCache: FlowFieldCache;
   /** Map size in fixed-point sub-units. */
@@ -110,6 +138,7 @@ export function createSim(seed: number, opts: SimOptions = {}): SimWorld {
     allocated: 0,
     mapId,
     grid,
+    fog: Array.from({ length: MAX_PLAYERS }, () => new Uint8Array(grid.w * grid.h)),
     flowCache: new FlowFieldCache(grid),
     mapW: grid.w * FP,
     mapH: grid.h * FP,
@@ -157,9 +186,29 @@ export function sortedAsc(ents: ArrayLike<number>): number[] {
   return Array.from(ents).sort((a, b) => a - b);
 }
 
+/** Number of players (fog grids etc.). */
+export const MAX_PLAYERS = 2;
+
 /** Unit kinds (placeholder until @wotc/data unit defs land in M7). */
-export const KIND_WALKER = 0; // wanders when idle (demo/bench crowds)
-export const KIND_UNIT = 1; // obeys orders, stands still when idle
+export const KIND_WALKER = 0; // wanders when idle (demo/bench crowds), unarmed
+export const KIND_UNIT = 1; // melee fighter (Bouncer placeholder)
+export const KIND_RANGED = 2; // ranged fighter (Strobe Acolyte placeholder)
+
+interface KindStats {
+  hp: number;
+  damage: number;
+  range: number;
+  cooldown: number;
+  acquire: number;
+  vision: number; // cells
+}
+
+/** Placeholder combat stats per kind — replaced by @wotc/data in M7. */
+export const KIND_STATS: Record<number, KindStats> = {
+  [KIND_WALKER]: { hp: 40, damage: 0, range: 0, cooldown: 0, acquire: 0, vision: 6 },
+  [KIND_UNIT]: { hp: 120, damage: 10, range: idiv(FP * 5, 4), cooldown: 16, acquire: FP * 6, vision: 8 },
+  [KIND_RANGED]: { hp: 70, damage: 14, range: FP * 5, cooldown: 24, acquire: FP * 7, vision: 9 },
+};
 
 /** Spawn a unit. Kind 0 gets the idle-wander Walker behavior. */
 export function spawnUnit(
@@ -170,19 +219,32 @@ export function spawnUnit(
   y: number,
 ): number {
   const eid = spawnEntity(sim);
-  const { Position, Velocity, Owner, Kind, MoveTarget, Walker } = sim.c;
+  const { Position, Velocity, Owner, Kind, MoveTarget, Health, Combat, Walker } = sim.c;
   addComponent(sim.world, eid, Position);
   addComponent(sim.world, eid, Velocity);
   addComponent(sim.world, eid, Owner);
   addComponent(sim.world, eid, Kind);
   addComponent(sim.world, eid, MoveTarget);
+  addComponent(sim.world, eid, Health);
   Position.x[eid] = x;
   Position.y[eid] = y;
   Velocity.x[eid] = 0;
   Velocity.y[eid] = 0;
-  Owner.player[eid] = player;
+  Owner.player[eid] = player % MAX_PLAYERS;
   Kind.id[eid] = kind;
   MoveTarget.active[eid] = 0;
+  MoveTarget.amove[eid] = 0;
+  const stats = KIND_STATS[kind] ?? KIND_STATS[KIND_WALKER]!;
+  Health.hp[eid] = stats.hp;
+  Health.max[eid] = stats.hp;
+  if (stats.damage > 0) {
+    addComponent(sim.world, eid, Combat);
+    Combat.damage[eid] = stats.damage;
+    Combat.range[eid] = stats.range;
+    Combat.cooldown[eid] = stats.cooldown;
+    Combat.cdLeft[eid] = 0;
+    Combat.acquire[eid] = stats.acquire;
+  }
   if (kind === KIND_WALKER) {
     addComponent(sim.world, eid, Walker);
     Walker.cooldown[eid] = 0;

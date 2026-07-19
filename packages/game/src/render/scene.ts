@@ -10,6 +10,9 @@ import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
+import { RawTexture } from '@babylonjs/core/Materials/Textures/rawTexture';
+import { Texture } from '@babylonjs/core/Materials/Textures/texture';
+import { Engine } from '@babylonjs/core/Engines/engine';
 import '@babylonjs/core/Meshes/thinInstanceMesh';
 import '@babylonjs/core/Culling/ray';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh';
@@ -27,8 +30,13 @@ export interface GameScene {
   scene: Scene;
   camera: FreeCamera;
   ground: Mesh;
-  /** `timeSec` drives the beat-bob (presentation only, 128 BPM). */
-  updateUnits(units: UnitView[], timeSec: number): void;
+  /**
+   * `timeSec` drives the beat-bob (presentation only, 128 BPM). `fog` (the
+   * local player's grid) hides enemy units outside visible cells.
+   */
+  updateUnits(units: UnitView[], timeSec: number, fog?: Uint8Array | null): void;
+  /** Upload a new fog grid to the overlay texture. */
+  updateFog(fog: Uint8Array): void;
   /** Draw selection rings under the given units. */
   updateSelection(units: UnitView[], selected: ReadonlySet<number>): void;
   /** Spawn a short expanding ring at a world position (order feedback). */
@@ -116,30 +124,103 @@ export function createGameScene(
   let colors = new Float32Array(0);
   const tmp = Matrix.Identity();
 
-  function updateUnits(units: UnitView[], timeSec: number): void {
+  // Health bars: one flat batch above damaged units.
+  const barMesh = MeshBuilder.CreateBox('hpbar', { width: 0.9, height: 0.07, depth: 0.12 }, scene);
+  const barMat = new StandardMaterial('hpbarMat', scene);
+  barMat.disableLighting = true;
+  barMat.emissiveColor = Color3.White();
+  barMesh.material = barMat;
+  barMesh.isPickable = false;
+  barMesh.thinInstanceRegisterAttribute('color', 4);
+  let barMatrices = new Float32Array(0);
+  let barColors = new Float32Array(0);
+
+  function updateUnits(units: UnitView[], timeSec: number, fog?: Uint8Array | null): void {
     if (units.length > capacity) {
       capacity = Math.max(64, units.length * 2);
       matrices = new Float32Array(capacity * 16);
       colors = new Float32Array(capacity * 4);
+      barMatrices = new Float32Array(capacity * 16);
+      barColors = new Float32Array(capacity * 4);
     }
     const beat = timeSec * BEAT_HZ * Math.PI;
-    for (let i = 0; i < units.length; i++) {
-      const u = units[i]!;
+    let n = 0;
+    let bars = 0;
+    for (const u of units) {
+      // Enemies in unseen cells don't get drawn (fog is sim-authoritative).
+      if (fog && u.player !== 0) {
+        const ci = Math.floor(u.x) + Math.floor(u.y) * mapCells;
+        if (fog[ci] !== 2) continue;
+      }
       // Everybody dances: a per-unit phase-offset bounce on the beat.
       const bounce = Math.abs(Math.sin(beat + u.eid * 0.7));
       const squash = 1 + bounce * 0.25;
       Matrix.ScalingToRef(1, squash, 1, tmp);
       tmp.setTranslationFromFloats(u.x, 0.55 * squash + bounce * 0.15, u.y);
-      tmp.copyToArray(matrices, i * 16);
+      tmp.copyToArray(matrices, n * 16);
       const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
-      colors[i * 4] = r;
-      colors[i * 4 + 1] = g;
-      colors[i * 4 + 2] = b;
-      colors[i * 4 + 3] = 1;
+      colors[n * 4] = r;
+      colors[n * 4 + 1] = g;
+      colors[n * 4 + 2] = b;
+      colors[n * 4 + 3] = 1;
+      n++;
+      if (u.maxHp > 0 && u.hp < u.maxHp) {
+        const frac = Math.max(0, u.hp / u.maxHp);
+        Matrix.ScalingToRef(frac, 1, 1, tmp);
+        tmp.setTranslationFromFloats(u.x - 0.45 * (1 - frac), 1.7, u.y);
+        tmp.copyToArray(barMatrices, bars * 16);
+        barColors[bars * 4] = 1 - frac;
+        barColors[bars * 4 + 1] = frac;
+        barColors[bars * 4 + 2] = 0.15;
+        barColors[bars * 4 + 3] = 1;
+        bars++;
+      }
     }
-    unitMesh.thinInstanceSetBuffer('matrix', matrices.subarray(0, units.length * 16), 16, false);
-    unitMesh.thinInstanceSetBuffer('color', colors.subarray(0, units.length * 4), 4, false);
-    unitMesh.thinInstanceCount = units.length;
+    unitMesh.thinInstanceSetBuffer('matrix', matrices.subarray(0, n * 16), 16, false);
+    unitMesh.thinInstanceSetBuffer('color', colors.subarray(0, n * 4), 4, false);
+    unitMesh.thinInstanceCount = n;
+    if (bars > 0) {
+      barMesh.setEnabled(true);
+      barMesh.thinInstanceSetBuffer('matrix', barMatrices.subarray(0, bars * 16), 16, false);
+      barMesh.thinInstanceSetBuffer('color', barColors.subarray(0, bars * 4), 4, false);
+      barMesh.thinInstanceCount = bars;
+    } else {
+      barMesh.setEnabled(false);
+    }
+  }
+
+  // ── Fog overlay ───────────────────────────────────────────────────────────
+  // A plane above the world with an alpha texture: unexplored ≈ opaque,
+  // explored = dim, visible = clear. Bilinear filtering softens cell edges.
+  const fogData = new Uint8Array(mapCells * mapCells * 4);
+  fogData.fill(0);
+  for (let i = 0; i < mapCells * mapCells; i++) fogData[i * 4 + 3] = 235;
+  const fogTexture = RawTexture.CreateRGBATexture(
+    fogData,
+    mapCells,
+    mapCells,
+    scene,
+    false,
+    false,
+    Texture.BILINEAR_SAMPLINGMODE,
+    Engine.TEXTURETYPE_UNSIGNED_BYTE,
+  );
+  const fogPlane = MeshBuilder.CreateGround('fog', { width: mapCells, height: mapCells }, scene);
+  fogPlane.position.set(mapCells / 2, 3.2, mapCells / 2);
+  fogPlane.isPickable = false;
+  const fogMat = new StandardMaterial('fogMat', scene);
+  fogMat.diffuseColor = Color3.Black();
+  fogMat.specularColor = Color3.Black();
+  fogMat.emissiveColor = Color3.Black();
+  fogMat.opacityTexture = fogTexture;
+  fogMat.disableLighting = true;
+  fogPlane.material = fogMat;
+
+  function updateFog(fog: Uint8Array): void {
+    for (let i = 0; i < fog.length; i++) {
+      fogData[i * 4 + 3] = fog[i] === 2 ? 0 : fog[i] === 1 ? 110 : 235;
+    }
+    fogTexture.update(fogData);
   }
 
   // ── Selection rings ───────────────────────────────────────────────────────
@@ -205,7 +286,7 @@ export function createGameScene(
     }
   });
 
-  return { scene, camera, ground, updateUnits, updateSelection, ping };
+  return { scene, camera, ground, updateUnits, updateFog, updateSelection, ping };
 }
 
 function setupCameraRig(scene: Scene, camera: FreeCamera, mapCells: number): void {

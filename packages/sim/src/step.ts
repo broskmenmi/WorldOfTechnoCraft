@@ -10,7 +10,11 @@ import {
   componentFields,
   hasComponent,
   isAlive,
+  KIND_STATS,
+  KIND_WALKER,
+  killEntity,
   mapIndex,
+  MAX_PLAYERS,
   sortedAsc,
   spawnUnit,
   type SimWorld,
@@ -60,6 +64,9 @@ function applyCommand(sim: SimWorld, cmd: Command): void {
         if (!isAlive(sim, eid)) continue;
         MoveTarget.x[eid] = tx;
         MoveTarget.y[eid] = ty;
+        MoveTarget.destX[eid] = tx;
+        MoveTarget.destY[eid] = ty;
+        MoveTarget.amove[eid] = cmd.mode === 'a' ? 1 : 0;
         MoveTarget.active[eid] = 1;
         MoveTarget.stuck[eid] = 0;
       }
@@ -69,6 +76,7 @@ function applyCommand(sim: SimWorld, cmd: Command): void {
       for (const eid of cmd.unitIds) {
         if (!isAlive(sim, eid)) continue;
         MoveTarget.active[eid] = 0;
+        MoveTarget.amove[eid] = 0;
         Velocity.x[eid] = 0;
         Velocity.y[eid] = 0;
       }
@@ -105,17 +113,110 @@ function walkerSystem(sim: SimWorld): void {
 }
 
 /**
+ * Combat: acquire the nearest enemy in range, chase it (attack-move and idle
+ * units), swing on cooldown, kill at 0 hp. Deterministic: ascending-eid
+ * iteration, nearest-then-lowest-eid targeting, immediate kills.
+ */
+function combatSystem(sim: SimWorld, hash: SpatialHash): void {
+  const { Position, Owner, Combat, Health, MoveTarget, Velocity } = sim.c;
+  for (const eid of sortedAsc(query(sim.world, [Position, Combat, Owner, MoveTarget]))) {
+    if (Combat.cdLeft[eid]! > 0) Combat.cdLeft[eid] = Combat.cdLeft[eid]! - 1;
+    if (!isAlive(sim, eid)) continue; // killed earlier this tick
+    const px = Position.x[eid]!;
+    const py = Position.y[eid]!;
+    const chasing =
+      MoveTarget.active[eid] === 1 &&
+      (MoveTarget.x[eid] !== MoveTarget.destX[eid] || MoveTarget.y[eid] !== MoveTarget.destY[eid]);
+    // Plain move orders (no amove) are honored: don't get distracted.
+    const obeyingPlainMove = MoveTarget.active[eid] === 1 && MoveTarget.amove[eid] === 0 && !chasing;
+    if (obeyingPlainMove) continue;
+
+    const enemy = hash.nearestEnemy(px, py, Combat.acquire[eid]!, Owner.player[eid]!);
+    if (enemy === 0) {
+      if (chasing) {
+        // Lost the target: resume the original destination.
+        MoveTarget.x[eid] = MoveTarget.destX[eid]!;
+        MoveTarget.y[eid] = MoveTarget.destY[eid]!;
+        MoveTarget.stuck[eid] = 0;
+      }
+      continue;
+    }
+    const ex = Position.x[enemy]!;
+    const ey = Position.y[enemy]!;
+    const d = dist(px, py, ex, ey);
+    if (d <= Combat.range[eid]!) {
+      // In range: plant feet and swing.
+      MoveTarget.active[eid] = 0;
+      Velocity.x[eid] = 0;
+      Velocity.y[eid] = 0;
+      if (Combat.cdLeft[eid]! <= 0) {
+        Combat.cdLeft[eid] = Combat.cooldown[eid]!;
+        Health.hp[enemy] = Health.hp[enemy]! - Combat.damage[eid]!;
+        if (Health.hp[enemy]! <= 0) killEntity(sim, enemy);
+      }
+    } else {
+      // Chase. Idle units remember home so they return after the fight.
+      if (MoveTarget.active[eid] === 0 && !chasing) {
+        MoveTarget.destX[eid] = px;
+        MoveTarget.destY[eid] = py;
+      }
+      MoveTarget.x[eid] = ex;
+      MoveTarget.y[eid] = ey;
+      MoveTarget.active[eid] = 1;
+      MoveTarget.stuck[eid] = 0;
+    }
+  }
+}
+
+/**
+ * Fog of war: every 4 ticks, visible cells decay to explored, then every
+ * living unit stamps its vision disc. States: 0 unexplored, 1 explored,
+ * 2 visible.
+ */
+const FOG_INTERVAL = 4;
+
+function fogSystem(sim: SimWorld): void {
+  if (sim.tick % FOG_INTERVAL !== 0) return;
+  const { Position, Owner, Kind } = sim.c;
+  const w = sim.grid.w;
+  for (const fogGrid of sim.fog) {
+    for (let i = 0; i < fogGrid.length; i++) {
+      if (fogGrid[i] === 2) fogGrid[i] = 1;
+    }
+  }
+  for (let eid = 1; eid <= sim.allocated; eid++) {
+    if (!isAlive(sim, eid)) continue;
+    const player = Owner.player[eid]!;
+    if (player >= MAX_PLAYERS) continue;
+    const fogGrid = sim.fog[player]!;
+    const cx = toCell(Position.x[eid]!);
+    const cy = toCell(Position.y[eid]!);
+    const r = (KIND_STATS[Kind.id[eid]!] ?? KIND_STATS[KIND_WALKER]!).vision;
+    const rSq = r * r;
+    for (let dy = -r; dy <= r; dy++) {
+      const yy = cy + dy;
+      if (yy < 0 || yy >= sim.grid.h) continue;
+      for (let dx = -r; dx <= r; dx++) {
+        const xx = cx + dx;
+        if (xx < 0 || xx >= w) continue;
+        if (dx * dx + dy * dy <= rSq) fogGrid[xx + yy * w] = 2;
+      }
+    }
+  }
+}
+
+/**
  * Flow-field movement: far from the target, follow the shared per-order flow
  * field; near it, steer directly. Separation spreads crowds; blocked cells
  * get axis-slid around; units that stop progressing give up (stuck counter).
  */
-function movementSystem(sim: SimWorld): void {
+function movementSystem(sim: SimWorld, hash: SpatialHash): void {
   const { Position, Velocity, MoveTarget } = sim.c;
   const movers = sortedAsc(query(sim.world, [Position, Velocity, MoveTarget]));
-  const hash = new SpatialHash(sim);
 
   for (const eid of movers) {
     if (MoveTarget.active[eid] !== 1) continue;
+    if (!isAlive(sim, eid)) continue; // killed by combat this tick
     const px = Position.x[eid]!;
     const py = Position.y[eid]!;
     const tx = MoveTarget.x[eid]!;
@@ -125,6 +226,9 @@ function movementSystem(sim: SimWorld): void {
       Velocity.x[eid] = 0;
       Velocity.y[eid] = 0;
       MoveTarget.active[eid] = 0;
+      if (MoveTarget.x[eid] === MoveTarget.destX[eid] && MoveTarget.y[eid] === MoveTarget.destY[eid]) {
+        MoveTarget.amove[eid] = 0; // arrived at the ordered destination
+      }
       continue;
     }
 
@@ -220,7 +324,10 @@ export function step(sim: SimWorld, commands: readonly Command[] = []): void {
     applyCommand(sim, cmd);
   }
   walkerSystem(sim);
-  movementSystem(sim);
+  const hash = new SpatialHash(sim);
+  combatSystem(sim, hash);
+  movementSystem(sim, hash);
+  fogSystem(sim);
   sim.tick++;
 }
 
@@ -236,6 +343,9 @@ export function checksum(sim: SimWorld): number {
   h = fnv1aI32(h, sim.prng.s);
   h = fnv1aI32(h, mapIndex(sim.mapId));
   h = fnv1aI32(h, sim.allocated);
+  for (const fogGrid of sim.fog) {
+    h = fnv1aArray(h, fogGrid, fogGrid.length);
+  }
   for (const name of COMPONENT_NAMES) {
     const component = sim.c[name];
     for (let eid = 1; eid <= sim.allocated; eid++) {

@@ -19,6 +19,8 @@ export interface UnitView {
   player: number;
   kind: number;
   moving: boolean;
+  hp: number;
+  maxHp: number;
 }
 
 interface Snapshot {
@@ -48,6 +50,8 @@ export class SimHost {
   onReady: (() => void) | null = null;
   /** Fires after each new snapshot is in place (waypoint queues hook here). */
   onSnapshot: (() => void) | null = null;
+  /** Latest player-0 fog grid (0 unexplored / 1 explored / 2 visible). */
+  fog: Uint8Array | null = null;
 
   constructor() {
     this.worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
@@ -58,6 +62,7 @@ export class SimHost {
       } else if (msg.type === 'snapshot') {
         this.prev = this.curr;
         this.curr = parseSnapshot(msg.buffer, performance.now());
+        if (msg.fog) this.fog = new Uint8Array(msg.fog);
         this.flushOutbox();
         this.onSnapshot?.();
       }
@@ -114,6 +119,8 @@ export class SimHost {
         player: curr.data[o + 3]!,
         kind: curr.data[o + 4]!,
         moving: (curr.data[o + 5]! & 1) === 1,
+        hp: curr.data[o + 6]!,
+        maxHp: curr.data[o + 7]!,
       });
     }
     return out;
