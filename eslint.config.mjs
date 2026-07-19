@@ -13,7 +13,12 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
   },
   {
-    files: ['packages/sim/cli/**/*.ts', '**/vite.config.ts', '**/vitest.config.ts'],
+    files: [
+      'packages/sim/cli/**/*.ts',
+      'packages/*/tools/**/*.mjs',
+      '**/vite.config.ts',
+      '**/vitest.config.ts',
+    ],
     languageOptions: { globals: { ...globals.node } },
   },
 

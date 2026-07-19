@@ -1,5 +1,10 @@
 // @wotc/sim — the deterministic game core.
 // Integers only. No DOM, no wall-clock, no Math.random. The lint config enforces it.
 
-/** Fixed-point scale: 1024 sub-units per world cell. */
-export const FP = 1024;
+export * from './fp.ts';
+export * from './prng.ts';
+export * from './hash.ts';
+export * from './commands.ts';
+export * from './world.ts';
+export * from './step.ts';
+export * from './snapshot.ts';

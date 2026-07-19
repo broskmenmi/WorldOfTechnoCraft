@@ -22,3 +22,46 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build
+
+  # Same seed + same commands must produce identical checksum streams — twice
+  # in a row, and across a snapshot/restore boundary. Any diff is a desync bug.
+  determinism:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run twice and diff checksum streams
+        working-directory: packages/sim
+        run: |
+          npx tsx cli/run.ts --seed 42 --ticks 12000 --units 1000 --out /tmp/a.json
+          npx tsx cli/run.ts --seed 42 --ticks 12000 --units 1000 --out /tmp/b.json
+          npx tsx cli/replay-diff.ts /tmp/a.json /tmp/b.json
+      - name: Snapshot/restore must converge with the uninterrupted run
+        working-directory: packages/sim
+        run: |
+          npx tsx cli/run.ts --seed 42 --ticks 6000 --units 1000 --snapshot-out /tmp/snap.bin
+          npx tsx cli/run.ts --from-snapshot /tmp/snap.bin --seed 42 --ticks 6000 --units 1000 --out /tmp/resumed.json
+          npx tsx cli/replay-diff.ts /tmp/a.json /tmp/resumed.json
+
+  sim-perf-budget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 1000-unit sim must stay under 10 ms/tick mean
+        working-directory: packages/sim
+        run: npx tsx cli/run.ts --seed 7 --ticks 4000 --units 1000 --budget-mean-ms 10
