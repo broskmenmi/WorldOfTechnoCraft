@@ -38,7 +38,8 @@ async function boot(): Promise<void> {
 
   const views: UnitView[] = [];
   engine.runRenderLoop(() => {
-    updateUnits(host.units(performance.now(), views));
+    const now = performance.now();
+    updateUnits(host.units(now, views), now / 1000);
     scene.render();
     hud.textContent =
       `World of TechnoCraft — ${backend}\n` +

@@ -12,5 +12,13 @@ export default defineConfig({
   server: { headers: coopCoep },
   preview: { headers: coopCoep },
   worker: { format: 'es' },
-  build: { target: 'es2022' },
+  build: {
+    target: 'es2022',
+    rollupOptions: {
+      input: {
+        index: 'index.html',
+        bench: 'bench.html',
+      },
+    },
+  },
 });

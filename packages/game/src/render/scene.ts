@@ -22,8 +22,12 @@ const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
 
 export interface GameScene {
   scene: Scene;
-  updateUnits(units: UnitView[]): void;
+  /** `timeSec` drives the beat-bob (presentation only, 128 BPM). */
+  updateUnits(units: UnitView[], timeSec: number): void;
 }
+
+/** Beats per second at the canonical 128 BPM. */
+const BEAT_HZ = 128 / 60;
 
 export function createGameScene(engine: AbstractEngine, mapCells: number): GameScene {
   const scene = new Scene(engine);
@@ -68,15 +72,20 @@ export function createGameScene(engine: AbstractEngine, mapCells: number): GameS
   let colors = new Float32Array(0);
   const tmp = Matrix.Identity();
 
-  function updateUnits(units: UnitView[]): void {
+  function updateUnits(units: UnitView[], timeSec: number): void {
     if (units.length > capacity) {
       capacity = Math.max(64, units.length * 2);
       matrices = new Float32Array(capacity * 16);
       colors = new Float32Array(capacity * 4);
     }
+    const beat = timeSec * BEAT_HZ * Math.PI;
     for (let i = 0; i < units.length; i++) {
       const u = units[i]!;
-      Matrix.TranslationToRef(u.x, 0.55, u.y, tmp);
+      // Everybody dances: a per-unit phase-offset bounce on the beat.
+      const bounce = Math.abs(Math.sin(beat + u.eid * 0.7));
+      const squash = 1 + bounce * 0.25;
+      Matrix.ScalingToRef(1, squash, 1, tmp);
+      tmp.setTranslationFromFloats(u.x, 0.55 * squash + bounce * 0.15, u.y);
       tmp.copyToArray(matrices, i * 16);
       const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
       colors[i * 4] = r;
