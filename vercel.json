@@ -1,7 +1,7 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "pnpm --filter @wotc/game run build",
-  "outputDirectory": "packages/game/dist",
+  "buildCommand": "pnpm --filter @wotc/game run build && rm -rf dist && cp -r packages/game/dist dist",
+  "outputDirectory": "dist",
   "headers": [
     {
       "source": "/(.*)",
