@@ -2,9 +2,12 @@
 // Balance and jokes iterate here without touching engine code.
 // All numeric values are in sim units (fixed-point sub-units, ticks) and MUST be integers.
 
-export const DATA_VERSION = 2;
+export const DATA_VERSION = 3;
 
 export * from './types.ts';
 export * from './units.ts';
 export * from './buildings.ts';
+export * from './nodes.ts';
+export * from './heroes.ts';
+export * from './combat.ts';
 export * from './barks.ts';

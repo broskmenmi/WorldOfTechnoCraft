@@ -86,7 +86,49 @@ export interface GrantCommand {
   playerId: number;
   type: 'grant';
   cash: number;
-  vibe: number;
+  gear: number;
+}
+
+/** Send workers to gather from a resource node (auto-loops until told otherwise). */
+export interface HarvestCommand {
+  tick: number;
+  playerId: number;
+  type: 'harvest';
+  unitIds: number[];
+  nodeId: number;
+}
+
+/** Cast a hero ability (slot 0..3 = Q/W/E/R) at a target point. */
+export interface AbilityCommand {
+  tick: number;
+  playerId: number;
+  type: 'ability';
+  heroId: number;
+  slot: number;
+  x: number;
+  y: number;
+}
+
+/** Upgrade an HQ to the next tier. */
+export interface UpgradeCommand {
+  tick: number;
+  playerId: number;
+  type: 'upgrade';
+  buildingId: number;
+}
+
+/** Revive the player's dead hero at a depot. */
+export interface ReviveCommand {
+  tick: number;
+  playerId: number;
+  type: 'revive';
+}
+
+/** Deterministically set up the whole match from the map's setup table. */
+export interface SetupCommand {
+  tick: number;
+  playerId: number;
+  type: 'setup';
 }
 
 export type Command =
@@ -98,7 +140,12 @@ export type Command =
   | TrainCommand
   | RallyCommand
   | PolicyCommand
-  | GrantCommand;
+  | GrantCommand
+  | HarvestCommand
+  | AbilityCommand
+  | UpgradeCommand
+  | ReviveCommand
+  | SetupCommand;
 
 /** A recorded game: everything needed to reproduce it bit-for-bit. */
 export interface Replay {

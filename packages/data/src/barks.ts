@@ -29,23 +29,59 @@ export const BARKS: Readonly<Record<string, BarkSet>> = {
     onAttack: ['EYES FRONT.', 'Strobe warning is a courtesy, not a rule.'],
     onDeath: ['Fading… to black… professionally…'],
   },
-  monk_of_the_loop: {
+  front_left_monk: {
     onSelect: ['…', '…', 'Six hours. Same spot. Transcendent.'],
     onMove: ['(relocates without breaking the two-step)'],
-    onAttack: ['(disapproving stillness)'],
+    onAttack: ['(disapproving stillness, at speed)'],
     onDeath: ['The loop… continues… without me…'],
   },
-  cable_guy: {
+  bass_cannon: {
+    onSelect: ['Sub is warm.', 'Point me at something structural.'],
+    onMove: ['Rolling the rig.', 'Mind the wheels. Mind the WALLS.'],
+    onAttack: ['FEEL IT IN YOUR TEETH.'],
+    onDeath: ['the… low end… gone…'],
+  },
+  roadie: {
     onSelect: ['It’s not a cable problem.', 'It’s ALWAYS a cable problem.'],
-    onMove: ['Running a line.', 'Mind the gaffer tape.'],
+    onMove: ['Running a line.', 'Load in. Load out. Forever.'],
     onAttack: ['This is outside my job description. Like everything.'],
     onDeath: ['Check… channel two…'],
+  },
+  kapitein_hak: {
+    onSelect: ['MAAT!', 'The feet are ready.'],
+    onMove: ['Forward. Obviously.'],
+    onAttack: ['HAKKUH!', 'COME HERE. HUG. AFTER.'],
+    onDeath: ['tell them… it was… a good hug…'],
+  },
+  undercover_cop: {
+    onSelect: ['(adjusts lanyard)'],
+    onMove: ['(walks like a rental car)'],
+    onAttack: ['Right then. Names. NAMES.'],
+    onDeath: ['tell the precinct… the drop was… decent…'],
+  },
+  feral_gabber: {
+    onSelect: ['?????'],
+    onMove: ['(vibrates toward you)'],
+    onAttack: ['WAAR IS DAT FEESTJE'],
+    onDeath: ['back… to the… field…'],
+  },
+  chief_inspector: {
+    onSelect: ['Decibels noted.'],
+    onMove: ['(measures while walking)'],
+    onAttack: ['Section 63. With prejudice.'],
+    onDeath: ['my records… four hundred… of them…'],
   },
   resident_dj: {
     onSelect: ['The USB is safe.', 'Quick b2b?', 'I only play sets, not tracks.'],
     onMove: ['Walking. Like a normal person. Being perceived.'],
     onAttack: ['This one’s an edit. MY edit.', 'ID? No IDs. Ever.'],
     onDeath: ['The USB… is in… the other bag…'],
+  },
+  clubgoer_harvest: {
+    onSelect: [],
+    onMove: ['Back of the queue. Again. Fine.'],
+    onAttack: [],
+    onDeath: [],
   },
   gabber: {
     onSelect: ['MATE!', 'HAKKUH!', 'WHERE’S AMSTERDAM THEN?'],

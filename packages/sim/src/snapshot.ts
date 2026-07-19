@@ -6,9 +6,6 @@
 // raw component arrays wholesale — INCLUDING stale values on dead entities, so
 // the restored checksum is bit-identical to the source. Public bitecs API
 // only. Verified by the snapshot-convergence tests and CI.
-//
-// Every value is stored as i32 (4 bytes) regardless of the underlying array
-// type — simple, exact, and only the `allocated` prefix is stored.
 
 import { addComponent, hasComponent } from 'bitecs';
 import {
@@ -25,43 +22,50 @@ import {
 } from './world.ts';
 
 const MAGIC = 0x574f5443; // 'WOTC'
-export const SNAPSHOT_VERSION = 5;
+export const SNAPSHOT_VERSION = 6;
+
+const HEADER_WORDS = 10;
+const AI_WORDS = 8;
+const PLAYER_WORDS = 8;
 
 export function serializeSim(sim: SimWorld): ArrayBuffer {
   const n = sim.allocated;
   let fieldCount = 0;
   for (const name of COMPONENT_NAMES) fieldCount += componentFields(sim.c[name]).length;
 
-  const headerBytes = 14 * 4;
-  const playerBytes = MAX_PLAYERS * 4 * 4; // cash, vibe, heat, policy (as i32)
+  const headerBytes = (HEADER_WORDS + AI_WORDS + MAX_PLAYERS * PLAYER_WORDS) * 4;
   const membershipBytes = COMPONENT_NAMES.length * n;
   const valueBytes = fieldCount * n * 4;
   const fogBytes = sim.fog.reduce((s, g) => s + g.length, 0);
-  const buf = new ArrayBuffer(headerBytes + playerBytes + membershipBytes + valueBytes + fogBytes);
+  const buf = new ArrayBuffer(headerBytes + membershipBytes + valueBytes + fogBytes);
   const view = new DataView(buf);
 
   let o = 0;
+  const put = (v: number) => {
+    view.setInt32(o, v, true);
+    o += 4;
+  };
   view.setUint32(o, MAGIC, true);
-  view.setUint32((o += 4), SNAPSHOT_VERSION, true);
-  view.setInt32((o += 4), sim.tick, true);
-  view.setInt32((o += 4), sim.prng.s, true);
-  view.setUint32((o += 4), n, true);
-  view.setUint32((o += 4), mapIndex(sim.mapId), true);
-  view.setInt32((o += 4), sim.mapW, true);
-  view.setInt32((o += 4), sim.mapH, true);
-  view.setInt32((o += 4), sim.raidsSpawned, true);
-  view.setInt32((o += 4), sim.wavesSpawned, true);
-  view.setInt32((o += 4), sim.nextWaveTick, true);
-  view.setInt32((o += 4), sim.sunriseTick, true);
-  view.setInt32((o += 4), sim.matchState, true);
-  view.setInt32((o += 4), sim.peakVibe, true);
   o += 4;
+  put(SNAPSHOT_VERSION);
+  put(sim.tick);
+  put(sim.prng.s);
+  put(n);
+  put(mapIndex(sim.mapId));
+  put(sim.mapW);
+  put(sim.mapH);
+  put(sim.raidsSpawned);
+  put(sim.matchState);
+  for (let i = 0; i < AI_WORDS; i++) put(sim.aiState[i]!);
   for (let p = 0; p < MAX_PLAYERS; p++) {
-    view.setInt32(o, sim.cash[p]!, true);
-    view.setInt32(o + 4, sim.vibe[p]!, true);
-    view.setInt32(o + 8, sim.heat[p]!, true);
-    view.setInt32(o + 12, sim.policy[p]!, true);
-    o += 16;
+    put(sim.cash[p]!);
+    put(sim.gear[p]!);
+    put(sim.heat[p]!);
+    put(sim.policy[p]!);
+    put(sim.heroKind[p]!);
+    put(sim.heroLevel[p]!);
+    put(sim.heroXp[p]!);
+    put(sim.heroEid[p]!);
   }
 
   // Live ids are 1..n (bitecs reserves eid 0 as the null entity).
@@ -88,43 +92,50 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
 
 export function deserializeSim(buf: ArrayBuffer): SimWorld {
   const view = new DataView(buf);
-  if (buf.byteLength < 36 || view.getUint32(0, true) !== MAGIC) {
+  const minBytes = (HEADER_WORDS + AI_WORDS + MAX_PLAYERS * PLAYER_WORDS) * 4;
+  if (buf.byteLength < minBytes || view.getUint32(0, true) !== MAGIC) {
     throw new Error('not a WOTC snapshot');
   }
-  const version = view.getUint32(4, true);
+  let o = 4;
+  const get = (): number => {
+    const v = view.getInt32(o, true);
+    o += 4;
+    return v;
+  };
+  const version = get();
   if (version !== SNAPSHOT_VERSION) {
     throw new Error(`snapshot version ${version} != supported ${SNAPSHOT_VERSION}`);
   }
-  const tick = view.getInt32(8, true);
-  const prngState = view.getInt32(12, true);
-  const n = view.getUint32(16, true);
-  const mapIdx = view.getUint32(20, true);
-  const mapW = view.getInt32(24, true);
-  const mapH = view.getInt32(28, true);
-  const raidsSpawned = view.getInt32(32, true);
+  const tick = get();
+  const prngState = get();
+  const n = get();
+  const mapIdx = get();
+  const mapW = get();
+  const mapH = get();
+  const raidsSpawned = get();
+  const matchState = get();
   if (n > CAPACITY) throw new Error('snapshot exceeds entity capacity');
   const mapId = MAP_IDS[mapIdx];
   if (!mapId) throw new Error(`snapshot references unknown map index ${mapIdx}`);
-  let o = 56;
 
   const sim = createSim(0, { mapId });
   sim.tick = tick;
   sim.prng.s = prngState;
   sim.raidsSpawned = raidsSpawned;
-  sim.wavesSpawned = view.getInt32(36, true);
-  sim.nextWaveTick = view.getInt32(40, true);
-  sim.sunriseTick = view.getInt32(44, true);
-  sim.matchState = view.getInt32(48, true);
-  sim.peakVibe = view.getInt32(52, true);
+  sim.matchState = matchState;
   if (sim.mapW !== mapW || sim.mapH !== mapH) {
     throw new Error('snapshot map size mismatch — map definition changed');
   }
+  for (let i = 0; i < AI_WORDS; i++) sim.aiState[i] = get();
   for (let p = 0; p < MAX_PLAYERS; p++) {
-    sim.cash[p] = view.getInt32(o, true);
-    sim.vibe[p] = view.getInt32(o + 4, true);
-    sim.heat[p] = view.getInt32(o + 8, true);
-    sim.policy[p] = view.getInt32(o + 12, true);
-    o += 16;
+    sim.cash[p] = get();
+    sim.gear[p] = get();
+    sim.heat[p] = get();
+    sim.policy[p] = get();
+    sim.heroKind[p] = get();
+    sim.heroLevel[p] = get();
+    sim.heroXp[p] = get();
+    sim.heroEid[p] = get();
   }
 
   // Recreate the monotonic id space (ids 1..n), then re-add membership.
@@ -149,7 +160,7 @@ export function deserializeSim(buf: ArrayBuffer): SimWorld {
     fogGrid.set(new Uint8Array(buf, o, fogGrid.length));
     o += fogGrid.length;
   }
-  // Buildings restored above — re-block their footprints on the fresh grid.
+  // Buildings/nodes restored above — re-block their footprints.
   restampFootprints(sim);
   return sim;
 }
