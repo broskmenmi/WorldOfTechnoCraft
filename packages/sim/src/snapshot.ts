@@ -16,19 +16,21 @@ import {
   COMPONENT_NAMES,
   componentFields,
   createSim,
+  MAP_IDS,
+  mapIndex,
   spawnEntity,
   type SimWorld,
 } from './world.ts';
 
 const MAGIC = 0x574f5443; // 'WOTC'
-export const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_VERSION = 2;
 
 export function serializeSim(sim: SimWorld): ArrayBuffer {
   const n = sim.allocated;
   let fieldCount = 0;
   for (const name of COMPONENT_NAMES) fieldCount += componentFields(sim.c[name]).length;
 
-  const headerBytes = 7 * 4;
+  const headerBytes = 8 * 4;
   const membershipBytes = COMPONENT_NAMES.length * n;
   const valueBytes = fieldCount * n * 4;
   const buf = new ArrayBuffer(headerBytes + membershipBytes + valueBytes);
@@ -40,6 +42,7 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
   view.setInt32((o += 4), sim.tick, true);
   view.setInt32((o += 4), sim.prng.s, true);
   view.setUint32((o += 4), n, true);
+  view.setUint32((o += 4), mapIndex(sim.mapId), true);
   view.setInt32((o += 4), sim.mapW, true);
   view.setInt32((o += 4), sim.mapH, true);
   o += 4;
@@ -64,7 +67,7 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
 
 export function deserializeSim(buf: ArrayBuffer): SimWorld {
   const view = new DataView(buf);
-  if (buf.byteLength < 28 || view.getUint32(0, true) !== MAGIC) {
+  if (buf.byteLength < 32 || view.getUint32(0, true) !== MAGIC) {
     throw new Error('not a WOTC snapshot');
   }
   const version = view.getUint32(4, true);
@@ -74,16 +77,20 @@ export function deserializeSim(buf: ArrayBuffer): SimWorld {
   const tick = view.getInt32(8, true);
   const prngState = view.getInt32(12, true);
   const n = view.getUint32(16, true);
-  const mapW = view.getInt32(20, true);
-  const mapH = view.getInt32(24, true);
+  const mapIdx = view.getUint32(20, true);
+  const mapW = view.getInt32(24, true);
+  const mapH = view.getInt32(28, true);
   if (n > CAPACITY) throw new Error('snapshot exceeds entity capacity');
-  let o = 28;
+  const mapId = MAP_IDS[mapIdx];
+  if (!mapId) throw new Error(`snapshot references unknown map index ${mapIdx}`);
+  let o = 32;
 
-  const sim = createSim(0);
+  const sim = createSim(0, { mapId });
   sim.tick = tick;
   sim.prng.s = prngState;
-  sim.mapW = mapW;
-  sim.mapH = mapH;
+  if (sim.mapW !== mapW || sim.mapH !== mapH) {
+    throw new Error('snapshot map size mismatch — map definition changed');
+  }
 
   // Recreate the monotonic id space (ids 1..n), then re-add membership.
   for (let i = 0; i < n; i++) spawnEntity(sim);

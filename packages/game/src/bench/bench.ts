@@ -44,7 +44,7 @@ async function boot(): Promise<void> {
     }
     host.issue(...inputs);
   };
-  host.start(23, MAP_CELLS);
+  host.start(23, 'empty256');
 
   const frameTimes: number[] = [];
   let last = performance.now();

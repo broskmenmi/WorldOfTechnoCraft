@@ -2,7 +2,7 @@
 // and the interpolation clock the renderer reads. Never extrapolates — the
 // renderer always shows a blend of the last two confirmed sim states.
 
-import { FP } from '@wotc/sim';
+import { FP, type MapId } from '@wotc/sim';
 import {
   SNAPSHOT_HEADER,
   SNAPSHOT_STRIDE,
@@ -65,8 +65,8 @@ export class SimHost {
     };
   }
 
-  start(seed: number, mapCells = 256): void {
-    this.send({ type: 'init', seed, mapCells });
+  start(seed: number, mapId: MapId = 'empty256'): void {
+    this.send({ type: 'init', seed, mapId });
   }
 
   issue(...inputs: CommandInput[]): void {

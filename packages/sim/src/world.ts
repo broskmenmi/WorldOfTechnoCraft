@@ -7,6 +7,9 @@ import {
   type World,
 } from 'bitecs';
 import { FP } from './fp.ts';
+import type { WalkGrid } from './map/grid.ts';
+import { buildMap, type MapId } from './map/maps.ts';
+import { FlowFieldCache } from './path/flowfield.ts';
 import { createPrng, type Prng } from './prng.ts';
 
 // ── Capacity & entity id policy ─────────────────────────────────────────────
@@ -32,7 +35,7 @@ export function createComponents() {
     Velocity: { x: i32(), y: i32() },
     Owner: { player: ui8() },
     Kind: { id: ui16() },
-    MoveTarget: { x: i32(), y: i32(), active: ui8() },
+    MoveTarget: { x: i32(), y: i32(), active: ui8(), stuck: i32() },
     /** Debug/demo behavior: wander randomly when idle (M1/M2 scaffolding). */
     Walker: { cooldown: i32() },
   };
@@ -82,28 +85,39 @@ export interface SimWorld {
   prng: Prng;
   /** Total entities ever allocated (monotonic — never decreases). */
   allocated: number;
+  mapId: MapId;
+  /** Static walkability — derived from mapId, not checksummed/snapshotted. */
+  grid: WalkGrid;
+  /** Derived cache — deterministic function of (grid, target), never state. */
+  flowCache: FlowFieldCache;
   /** Map size in fixed-point sub-units. */
   mapW: number;
   mapH: number;
 }
 
 export interface SimOptions {
-  /** Map size in cells (default 256×256). */
-  mapCells?: number;
+  mapId?: MapId;
 }
 
 export function createSim(seed: number, opts: SimOptions = {}): SimWorld {
-  const cells = opts.mapCells ?? 256;
+  const mapId = opts.mapId ?? 'empty256';
+  const grid = buildMap(mapId);
   return {
     world: createWorld(),
     c: createComponents(),
     tick: 0,
     prng: createPrng(seed),
     allocated: 0,
-    mapW: cells * FP,
-    mapH: cells * FP,
+    mapId,
+    grid,
+    flowCache: new FlowFieldCache(grid),
+    mapW: grid.w * FP,
+    mapH: grid.h * FP,
   };
 }
+
+export { buildMap, mapIndex, MAP_IDS } from './map/maps.ts';
+export type { MapId } from './map/maps.ts';
 
 /**
  * Allocate an entity. Ids are sequential and never reused.

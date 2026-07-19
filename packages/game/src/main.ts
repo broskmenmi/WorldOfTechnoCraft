@@ -1,9 +1,10 @@
-import { FP, KIND_UNIT } from '@wotc/sim';
+import { buildMap, FP, KIND_UNIT } from '@wotc/sim';
 import { Controls } from './input/controls.ts';
 import { createGameEngine } from './render/engine.ts';
 import { createGameScene } from './render/scene.ts';
 import { SimHost, type UnitView } from './simHost.ts';
 
+const MAP_ID = 'skirmish01';
 const MAP_CELLS = 256;
 const DEMO_UNITS = 50;
 
@@ -20,32 +21,33 @@ function badge(): HTMLDivElement {
 async function boot(): Promise<void> {
   const canvas = document.getElementById('render-canvas') as HTMLCanvasElement;
   const { engine, backend } = await createGameEngine(canvas);
-  const game = createGameScene(engine, MAP_CELLS);
+  const game = createGameScene(engine, MAP_CELLS, buildMap(MAP_ID));
   const hud = badge();
 
   const host = new SimHost();
   host.onReady = () => {
     // A squad of obedient units for the player…
+    // South floor (below the wall at y≈128) — the squad must path the door.
     const inputs = Array.from({ length: DEMO_UNITS }, (_, i) => ({
       playerId: 0,
       type: 'spawn' as const,
       kind: KIND_UNIT,
       x: (100 + (i % 10) * 4) * FP,
-      y: (110 + Math.floor(i / 10) * 4) * FP,
+      y: (170 + Math.floor(i / 10) * 4) * FP,
     }));
-    // …and a rival crowd milling about to click around (not selectable).
+    // …and a rival crowd milling about beyond the wall (not selectable).
     for (let i = 0; i < 30; i++) {
       inputs.push({
         playerId: 1,
         type: 'spawn' as const,
         kind: 0,
-        x: (140 + (i % 6) * 5) * FP,
-        y: (140 + Math.floor(i / 6) * 5) * FP,
+        x: (110 + (i % 6) * 5) * FP,
+        y: (60 + Math.floor(i / 6) * 5) * FP,
       });
     }
     host.issue(...inputs);
   };
-  host.start(1337, MAP_CELLS);
+  host.start(1337, MAP_ID);
 
   const controls = new Controls(game, host);
   const views: UnitView[] = [];

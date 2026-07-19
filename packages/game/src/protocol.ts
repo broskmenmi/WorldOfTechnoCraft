@@ -5,7 +5,7 @@
 // worker stamps them onto the next tick — the stamped stream is the canonical
 // record (replay/save/network format).
 
-import type { Command } from '@wotc/sim';
+import type { Command, MapId } from '@wotc/sim';
 
 /** A command as issued by the UI, before the worker assigns its tick. */
 export type CommandInput =
@@ -14,7 +14,7 @@ export type CommandInput =
   | { playerId: number; type: 'stop'; unitIds: number[] };
 
 export type HostToWorker =
-  | { type: 'init'; seed: number; mapCells: number }
+  | { type: 'init'; seed: number; mapId: MapId }
   | { type: 'commands'; inputs: CommandInput[] }
   | { type: 'setRate'; ticksPerSecond: number };
 

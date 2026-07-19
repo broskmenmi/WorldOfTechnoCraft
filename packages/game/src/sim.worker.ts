@@ -72,7 +72,7 @@ self.onmessage = (ev: MessageEvent<HostToWorker>) => {
   switch (msg.type) {
     case 'init': {
       if (timer !== null) clearTimeout(timer);
-      sim = createSim(msg.seed, { mapCells: msg.mapCells });
+      sim = createSim(msg.seed, { mapId: msg.mapId });
       post({ type: 'ready' });
       loop();
       break;

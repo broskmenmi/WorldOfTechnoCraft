@@ -13,6 +13,7 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import '@babylonjs/core/Meshes/thinInstanceMesh';
 import '@babylonjs/core/Culling/ray';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh';
+import { isWalkable, type WalkGrid } from '@wotc/sim';
 import type { UnitView } from '../simHost.ts';
 
 const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
@@ -37,7 +38,11 @@ export interface GameScene {
 /** Beats per second at the canonical 128 BPM. */
 const BEAT_HZ = 128 / 60;
 
-export function createGameScene(engine: AbstractEngine, mapCells: number): GameScene {
+export function createGameScene(
+  engine: AbstractEngine,
+  mapCells: number,
+  grid?: WalkGrid,
+): GameScene {
   const scene = new Scene(engine);
   scene.clearColor = new Color4(0.03, 0.03, 0.045, 1);
 
@@ -63,9 +68,40 @@ export function createGameScene(engine: AbstractEngine, mapCells: number): GameS
     gridLines.push([new Vector3(i, 0.01, 0), new Vector3(i, 0.01, mapCells)]);
     gridLines.push([new Vector3(0, 0.01, i), new Vector3(mapCells, 0.01, i)]);
   }
-  const grid = MeshBuilder.CreateLineSystem('grid', { lines: gridLines }, scene);
-  grid.color = new Color3(0.14, 0.14, 0.18);
-  grid.isPickable = false;
+  const gridMesh = MeshBuilder.CreateLineSystem('grid', { lines: gridLines }, scene);
+  gridMesh.color = new Color3(0.14, 0.14, 0.18);
+  gridMesh.isPickable = false;
+
+  // Walls: one box per blocked cell that touches a walkable cell (interior
+  // blocked cells are invisible anyway) — one thin-instance batch.
+  if (grid) {
+    const wallMesh = MeshBuilder.CreateBox('wall', { size: 1 }, scene);
+    wallMesh.scaling.y = 2.2;
+    const wallMat = new StandardMaterial('wallMat', scene);
+    wallMat.diffuseColor = new Color3(0.16, 0.15, 0.2);
+    wallMat.emissiveColor = new Color3(0.05, 0.04, 0.08);
+    wallMat.specularColor = Color3.Black();
+    wallMesh.material = wallMat;
+    wallMesh.isPickable = false;
+    const wallMats: number[] = [];
+    const m = Matrix.Identity();
+    for (let cy = 0; cy < grid.h; cy++) {
+      for (let cx = 0; cx < grid.w; cx++) {
+        if (isWalkable(grid, cx, cy)) continue;
+        const exposed =
+          isWalkable(grid, cx + 1, cy) ||
+          isWalkable(grid, cx - 1, cy) ||
+          isWalkable(grid, cx, cy + 1) ||
+          isWalkable(grid, cx, cy - 1);
+        if (!exposed) continue;
+        Matrix.TranslationToRef(cx + 0.5, 1.1, cy + 0.5, m);
+        const base = wallMats.length;
+        wallMats.length += 16;
+        m.copyToArray(wallMats, base);
+      }
+    }
+    wallMesh.thinInstanceSetBuffer('matrix', new Float32Array(wallMats), 16, true);
+  }
 
   // Units: one box mesh, thin instances, per-instance color.
   const unitMesh = MeshBuilder.CreateBox('unit', { width: 0.6, depth: 0.6, height: 1.1 }, scene);

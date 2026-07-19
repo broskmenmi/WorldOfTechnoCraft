@@ -23,6 +23,7 @@ import {
   serializeSim,
   step,
   type Command,
+  type MapId,
   type SimWorld,
 } from '../src/index.ts';
 
@@ -59,6 +60,7 @@ export function generateSoak(seed: number, units: number, ticks: number): Comman
 
 const { values: args } = parseArgs({
   options: {
+    map: { type: 'string', default: 'empty256' },
     seed: { type: 'string', default: '42' },
     ticks: { type: 'string', default: '2000' },
     units: { type: 'string', default: '300' },
@@ -80,7 +82,7 @@ if (args['from-snapshot']) {
   sim = deserializeSim(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
   console.log(`resumed from snapshot at tick ${sim.tick}`);
 } else {
-  sim = createSim(seed);
+  sim = createSim(seed, { mapId: args.map as MapId });
 }
 
 const allCommands: Command[] = args.commands

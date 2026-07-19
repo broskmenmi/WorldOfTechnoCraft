@@ -8,3 +8,6 @@ export * from './commands.ts';
 export * from './world.ts';
 export * from './step.ts';
 export * from './snapshot.ts';
+export * from './map/grid.ts';
+export * from './path/flowfield.ts';
+export * from './path/steering.ts';
