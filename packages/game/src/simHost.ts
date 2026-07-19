@@ -18,6 +18,7 @@ export interface UnitView {
   y: number;
   player: number;
   kind: number;
+  moving: boolean;
 }
 
 interface Snapshot {
@@ -45,6 +46,8 @@ export class SimHost {
   private curr: Snapshot | null = null;
   private outbox: CommandInput[] = [];
   onReady: (() => void) | null = null;
+  /** Fires after each new snapshot is in place (waypoint queues hook here). */
+  onSnapshot: (() => void) | null = null;
 
   constructor() {
     this.worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
@@ -56,6 +59,7 @@ export class SimHost {
         this.prev = this.curr;
         this.curr = parseSnapshot(msg.buffer, performance.now());
         this.flushOutbox();
+        this.onSnapshot?.();
       }
       // 'stamped' messages become the replay log in M9.
     };
@@ -103,9 +107,27 @@ export class SimHost {
         x = px + (cx - px) * alpha;
         y = py + (cy - py) * alpha;
       }
-      out.push({ eid, x: x / FP, y: y / FP, player: curr.data[o + 3]!, kind: curr.data[o + 4]! });
+      out.push({
+        eid,
+        x: x / FP,
+        y: y / FP,
+        player: curr.data[o + 3]!,
+        kind: curr.data[o + 4]!,
+        moving: (curr.data[o + 5]! & 1) === 1,
+      });
     }
     return out;
+  }
+
+  /** Is this unit currently executing a move order (per latest snapshot)? */
+  isMoving(eid: number): boolean {
+    const o = this.curr?.index.get(eid);
+    return o !== undefined && (this.curr!.data[o + 5]! & 1) === 1;
+  }
+
+  /** Is this unit alive in the latest snapshot? */
+  isAlive(eid: number): boolean {
+    return this.curr?.index.has(eid) ?? false;
   }
 
   private flushOutbox(): void {

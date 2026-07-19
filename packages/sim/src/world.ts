@@ -143,7 +143,11 @@ export function sortedAsc(ents: ArrayLike<number>): number[] {
   return Array.from(ents).sort((a, b) => a - b);
 }
 
-/** Spawn a demo unit with the full M1 component set. */
+/** Unit kinds (placeholder until @wotc/data unit defs land in M7). */
+export const KIND_WALKER = 0; // wanders when idle (demo/bench crowds)
+export const KIND_UNIT = 1; // obeys orders, stands still when idle
+
+/** Spawn a unit. Kind 0 gets the idle-wander Walker behavior. */
 export function spawnUnit(
   sim: SimWorld,
   player: number,
@@ -158,7 +162,6 @@ export function spawnUnit(
   addComponent(sim.world, eid, Owner);
   addComponent(sim.world, eid, Kind);
   addComponent(sim.world, eid, MoveTarget);
-  addComponent(sim.world, eid, Walker);
   Position.x[eid] = x;
   Position.y[eid] = y;
   Velocity.x[eid] = 0;
@@ -166,7 +169,10 @@ export function spawnUnit(
   Owner.player[eid] = player;
   Kind.id[eid] = kind;
   MoveTarget.active[eid] = 0;
-  Walker.cooldown[eid] = 0;
+  if (kind === KIND_WALKER) {
+    addComponent(sim.world, eid, Walker);
+    Walker.cooldown[eid] = 0;
+  }
   return eid;
 }
 

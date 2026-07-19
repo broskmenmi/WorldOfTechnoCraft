@@ -27,9 +27,9 @@ function post(msg: WorkerToHost, transfer?: Transferable[]): void {
   (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
 }
 
-/** Pack live unit state for the renderer: [tick, count, (eid,x,y,player,kind)*]. */
+/** Pack live unit state for the renderer: [tick, count, (eid,x,y,player,kind,flags)*]. */
 function renderSnapshot(s: SimWorld): ArrayBuffer {
-  const { Position, Owner, Kind } = s.c;
+  const { Position, Owner, Kind, MoveTarget } = s.c;
   const eids: number[] = [];
   for (let eid = 1; eid <= s.allocated; eid++) {
     if (isAlive(s, eid)) eids.push(eid);
@@ -44,6 +44,7 @@ function renderSnapshot(s: SimWorld): ArrayBuffer {
     out[o++] = Position.y[eid]!;
     out[o++] = Owner.player[eid]!;
     out[o++] = Kind.id[eid]!;
+    out[o++] = MoveTarget.active[eid] === 1 ? 1 : 0; // FLAG_MOVING
   }
   return out.buffer;
 }

@@ -10,7 +10,7 @@ import type { Command } from '@wotc/sim';
 /** A command as issued by the UI, before the worker assigns its tick. */
 export type CommandInput =
   | { playerId: number; type: 'spawn'; kind: number; x: number; y: number }
-  | { playerId: number; type: 'move'; unitIds: number[]; x: number; y: number }
+  | { playerId: number; type: 'move'; unitIds: number[]; x: number; y: number; mode?: 'a' }
   | { playerId: number; type: 'stop'; unitIds: number[] };
 
 export type HostToWorker =
@@ -23,11 +23,14 @@ export type WorkerToHost =
   | {
       type: 'snapshot';
       tick: number;
-      /** Ints: [tick, count, then per unit: eid, x, y, player, kind]. */
+      /** Ints: [tick, count, then per unit: eid, x, y, player, kind, flags]. */
       buffer: ArrayBuffer;
     }
   | { type: 'stamped'; commands: Command[] };
 
 /** Ints per unit in the render snapshot buffer. */
-export const SNAPSHOT_STRIDE = 5;
+export const SNAPSHOT_STRIDE = 6;
 export const SNAPSHOT_HEADER = 2;
+
+/** Snapshot flag bits. */
+export const FLAG_MOVING = 1;

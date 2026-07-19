@@ -22,6 +22,8 @@ export interface MoveCommand {
   /** Target in fixed-point sub-units. */
   x: number;
   y: number;
+  /** 'a' = attack-move. Stored now, combat behavior lands in M6. */
+  mode?: 'a';
 }
 
 export interface StopCommand {

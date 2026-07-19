@@ -11,6 +11,8 @@ import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import '@babylonjs/core/Meshes/thinInstanceMesh';
+import '@babylonjs/core/Culling/ray';
+import type { Mesh } from '@babylonjs/core/Meshes/mesh';
 import type { UnitView } from '../simHost.ts';
 
 const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
@@ -22,8 +24,14 @@ const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
 
 export interface GameScene {
   scene: Scene;
+  camera: FreeCamera;
+  ground: Mesh;
   /** `timeSec` drives the beat-bob (presentation only, 128 BPM). */
   updateUnits(units: UnitView[], timeSec: number): void;
+  /** Draw selection rings under the given units. */
+  updateSelection(units: UnitView[], selected: ReadonlySet<number>): void;
+  /** Spawn a short expanding ring at a world position (order feedback). */
+  ping(x: number, y: number, kind: 'move' | 'attack'): void;
 }
 
 /** Beats per second at the canonical 128 BPM. */
@@ -98,7 +106,70 @@ export function createGameScene(engine: AbstractEngine, mapCells: number): GameS
     unitMesh.thinInstanceCount = units.length;
   }
 
-  return { scene, updateUnits };
+  // ── Selection rings ───────────────────────────────────────────────────────
+  const ringMesh = MeshBuilder.CreateTorus('selRing', { diameter: 1.2, thickness: 0.07, tessellation: 24 }, scene);
+  const ringMat = new StandardMaterial('selRingMat', scene);
+  ringMat.emissiveColor = new Color3(0.4, 1, 0.6);
+  ringMat.disableLighting = true;
+  ringMesh.material = ringMat;
+  ringMesh.isPickable = false;
+  let ringMatrices = new Float32Array(0);
+
+  function updateSelection(units: UnitView[], selected: ReadonlySet<number>): void {
+    let count = 0;
+    const needed = Math.min(selected.size, units.length) * 16;
+    if (ringMatrices.length < needed) ringMatrices = new Float32Array(needed * 2);
+    for (const u of units) {
+      if (!selected.has(u.eid)) continue;
+      Matrix.TranslationToRef(u.x, 0.06, u.y, tmp);
+      tmp.copyToArray(ringMatrices, count * 16);
+      count++;
+    }
+    if (count > 0) {
+      ringMesh.setEnabled(true);
+      ringMesh.thinInstanceSetBuffer('matrix', ringMatrices.subarray(0, count * 16), 16, false);
+      ringMesh.thinInstanceCount = count;
+    } else {
+      ringMesh.setEnabled(false);
+    }
+  }
+
+  // ── Order pings (expanding rings, ~400 ms) ────────────────────────────────
+  const PING_COLORS = { move: new Color3(0.4, 1, 0.6), attack: new Color3(1, 0.35, 0.3) };
+  const pings: Array<{ x: number; y: number; t0: number; mesh: Mesh }> = [];
+  const pingProto = MeshBuilder.CreateTorus('ping', { diameter: 1, thickness: 0.06, tessellation: 24 }, scene);
+  pingProto.setEnabled(false);
+  pingProto.isPickable = false;
+
+  function ping(x: number, y: number, kind: 'move' | 'attack'): void {
+    const mesh = pingProto.clone(`ping-${performance.now()}`);
+    const mat = new StandardMaterial('pingMat', scene);
+    mat.emissiveColor = PING_COLORS[kind];
+    mat.disableLighting = true;
+    mesh.material = mat;
+    mesh.position.set(x, 0.08, y);
+    mesh.setEnabled(true);
+    pings.push({ x, y, t0: performance.now(), mesh });
+  }
+
+  scene.onBeforeRenderObservable.add(() => {
+    const now = performance.now();
+    for (let i = pings.length - 1; i >= 0; i--) {
+      const p = pings[i]!;
+      const age = (now - p.t0) / 400;
+      if (age >= 1) {
+        p.mesh.material?.dispose();
+        p.mesh.dispose();
+        pings.splice(i, 1);
+      } else {
+        const s = 0.4 + age * 1.6;
+        p.mesh.scaling.set(s, 1, s);
+        p.mesh.visibility = 1 - age;
+      }
+    }
+  });
+
+  return { scene, camera, ground, updateUnits, updateSelection, ping };
 }
 
 function setupCameraRig(scene: Scene, camera: FreeCamera, mapCells: number): void {
@@ -118,10 +189,11 @@ function setupCameraRig(scene: Scene, camera: FreeCamera, mapCells: number): voi
     const speed = 28 * dt * (camera.position.y / 40 + 0.4);
     let dx = 0;
     let dz = 0;
-    if (keys.has('KeyW') || keys.has('ArrowUp')) dz += speed;
-    if (keys.has('KeyS') || keys.has('ArrowDown')) dz -= speed;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) dx -= speed;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) dx += speed;
+    // Arrow keys only — letter keys belong to unit controls (A = attack-move).
+    if (keys.has('ArrowUp')) dz += speed;
+    if (keys.has('ArrowDown')) dz -= speed;
+    if (keys.has('ArrowLeft')) dx -= speed;
+    if (keys.has('ArrowRight')) dx += speed;
     camera.position.x = Math.min(mapCells, Math.max(0, camera.position.x + dx));
     camera.position.z = Math.min(mapCells, Math.max(-20, camera.position.z + dz));
   });
