@@ -1,0 +1,19 @@
+{
+  "name": "@wotc/game",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@wotc/data": "workspace:*",
+    "@wotc/sim": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.1.5"
+  }
+}

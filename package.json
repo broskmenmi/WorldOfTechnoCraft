@@ -1,0 +1,22 @@
+{
+  "name": "worldoftechnocraft",
+  "private": true,
+  "version": "0.0.1",
+  "description": "World of TechnoCraft — a satirical browser RTS about techno culture. The drop is charging. Defend the drop.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "lint": "eslint .",
+    "test": "pnpm -r --if-present run test",
+    "build": "pnpm --filter @wotc/game run build",
+    "dev": "pnpm --filter @wotc/game run dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.64.0"
+  }
+}
