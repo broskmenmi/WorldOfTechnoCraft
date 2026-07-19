@@ -3,7 +3,7 @@
 // iteration (buckets built and scanned in ascending-eid order).
 
 import { FP, idiv, isqrt } from '../fp.ts';
-import { isAlive, type SimWorld } from '../world.ts';
+import { AMBIENT, isAlive, type SimWorld } from '../world.ts';
 
 /** Units closer than this (sub-units) push each other apart. */
 export const SEP_RADIUS = idiv(FP * 3, 4);
@@ -80,6 +80,7 @@ export class SpatialHash {
         if (!bucket) continue;
         for (const other of bucket) {
           if (Owner.player[other] === player) continue;
+          if (Owner.player[other] === AMBIENT) continue; // crowd is not a target
           if (!isAlive(this.sim, other)) continue;
           const dx = px - Position.x[other]!;
           const dy = py - Position.y[other]!;

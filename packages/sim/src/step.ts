@@ -20,6 +20,7 @@ import {
   killEntity,
   mapIndex,
   MAX_PLAYERS,
+  AMBIENT,
   NEUTRAL,
   nodeDef,
   QUEUE_SLOTS,
@@ -270,6 +271,12 @@ function setupMatch(sim: SimWorld): void {
   for (const [kind, cx, cy] of setup.creeps) {
     const [x, y] = snapWalkable(sim, cx * FP, cy * FP);
     spawnCreep(sim, kind, x, y);
+  }
+  for (const [kind, count, cx, cy] of setup.ambient) {
+    for (let i = 0; i < count; i++) {
+      const [x, y] = snapWalkable(sim, (cx + (i % 5) * 2) * FP, (cy + idiv(i, 5) * 2) * FP);
+      spawnUnit(sim, AMBIENT, kind, x, y);
+    }
   }
   for (let p = 0; p < MAX_PLAYERS; p++) {
     sim.cash[p] = setup.startCash;
@@ -967,9 +974,14 @@ function legionAiSystem(sim: SimWorld): void {
     if (tryTrain(sim, p, tent, kind)) sim.aiState[3] = counter + 1;
   }
 
-  // Attack wave.
+  // Attack wave: full-strength when the threshold is met, or an overdue push
+  // with whatever's on hand — supply-blocked one short of the threshold must
+  // not mean the Legion sits at home forever.
   const lastAttack = sim.aiState[1]!;
-  if (army.length >= sim.aiState[2]! && sim.tick - lastAttack > 45 * TICK_RATE) {
+  const sinceAttack = sim.tick - lastAttack;
+  const fullWave = army.length >= sim.aiState[2]! && sinceAttack > 45 * TICK_RATE;
+  const overdueWave = army.length >= 4 && sinceAttack > 180 * TICK_RATE;
+  if (fullWave || overdueWave) {
     const target = findBuilding(sim, 0);
     if (target !== 0) {
       for (const u of army) orderMove(sim, u, Position.x[target]!, Position.y[target]!, true);
@@ -978,7 +990,7 @@ function legionAiSystem(sim: SimWorld): void {
         orderMove(sim, heroEid, Position.x[target]!, Position.y[target]!, true);
       }
       sim.aiState[1] = sim.tick;
-      sim.aiState[2] = Math.min(24, sim.aiState[2]! + 4);
+      if (fullWave) sim.aiState[2] = Math.min(24, sim.aiState[2]! + 4);
     }
   }
 }

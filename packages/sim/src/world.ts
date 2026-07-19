@@ -38,6 +38,8 @@ export const QUEUE_SLOTS = 5;
 /** Players with fog/resources. Owner 2 = neutral hostiles (creeps/police). */
 export const MAX_PLAYERS = 2;
 export const NEUTRAL = 2;
+/** Owner 3 = ambient crowd: never targeted, never targets. Pure vibes. */
+export const AMBIENT = 3;
 
 /** Enum encodings for damage typing (order matters — stored in components). */
 export const ATTACK_TYPES: readonly AttackType[] = ['normal', 'pierce', 'siege', 'hero'];

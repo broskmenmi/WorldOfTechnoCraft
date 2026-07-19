@@ -67,6 +67,8 @@ export interface MatchSetup {
   nodes: Array<[number, number, number]>;
   /** [creepUnitKind, x(cells), y(cells)] */
   creeps: Array<[number, number, number]>;
+  /** Ambient crowd (neutral wanderers): [unitKind, count, cx, cy]. */
+  ambient: Array<[number, number, number, number]>;
   startCash: number;
   startGear: number;
 }
@@ -124,6 +126,12 @@ export const MATCH_SETUPS: Partial<Record<MapId, MatchSetup>> = {
       [U.feral_gabber.id, 193, 154],
       [U.feral_gabber.id, 200, 156],
       [U.undercover_cop.id, 196, 158],
+    ],
+    ambient: [
+      // The smoking-area crowd: purely decorative, endlessly vibing.
+      [U.raver.id, 10, 58, 210],
+      [U.raver.id, 10, 210, 58],
+      [U.raver.id, 6, 126, 136],
     ],
     startCash: 500,
     startGear: 150,

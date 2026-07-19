@@ -163,6 +163,11 @@ export class Controls {
       return;
     }
     if (e.button === 0) {
+      if (this.abilityPending >= 0) {
+        this.castAbility(this.abilityPending, e.clientX, e.clientY);
+        this.abilityPending = -1;
+        return;
+      }
       if (this.buildMode >= 0) {
         this.placeBuilding(e.clientX, e.clientY, e.shiftKey);
         return;

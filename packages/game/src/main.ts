@@ -2,12 +2,17 @@ import { buildMap, CYCLE_TICKS, DAY_TICKS, decodeReplay, encodeReplay, type MapI
 import { Controls } from './input/controls.ts';
 import { createGameEngine } from './render/engine.ts';
 import { createGameScene } from './render/scene.ts';
+import { UnitRenderer } from './render/units.ts';
+import { Effects, type DamageEvent } from './render/effects.ts';
+import { Dressing } from './render/dressing.ts';
 import { SimHost, type UnitView } from './simHost.ts';
 import { Minimap } from './ui/minimap.ts';
 import { BarkFeed } from './ui/barks.ts';
+import { SelectionPanel } from './ui/panel.ts';
 import { isTouchDevice, TouchBar } from './ui/touchbar.ts';
 import { setupHelp } from './ui/help.ts';
 import { TechnoEngine } from './audio/techno.ts';
+import { sfx } from './audio/sfx.ts';
 import { Color4 } from '@babylonjs/core/Maths/math.color';
 
 const MAP_ID: MapId = 'skirmish02';
@@ -94,6 +99,14 @@ async function boot(): Promise<void> {
   const minimap = new Minimap(grid, game.camera);
   const touch = isTouchDevice();
   const touchBar = touch ? new TouchBar(controls, audio) : null;
+  const unitRenderer = new UnitRenderer(game.scene);
+  const effects = new Effects(game.scene);
+  const dressing = new Dressing(game.scene, grid, game.ground, MAP_CELLS);
+  const panel = new SelectionPanel(controls, host, touch);
+  unitRenderer.onDeath = (v) => {
+    if (v.building) sfx.raze();
+    else sfx.death();
+  };
   setupHelp(touch);
   window.addEventListener('pointerdown', () => audio.start(), { once: true });
   window.addEventListener('keydown', (e) => {
@@ -114,6 +127,9 @@ async function boot(): Promise<void> {
   let lastFog: Uint8Array | null = null;
   let lastRaids = 0;
   let ended = false;
+  const prevHp = new Map<number, number>();
+  let prevCds: [number, number, number, number] = [0, 0, 0, 0];
+  let prevLevel = 1;
 
   engine.runRenderLoop(() => {
     const now = performance.now();
@@ -123,11 +139,60 @@ async function boot(): Promise<void> {
       lastFog = host.fog;
       game.updateFog(host.fog);
     }
+
+    // Fog-visible subset for the unit renderer (same rule the scene uses).
+    const fog = host.fog;
+    const visible = fog
+      ? views.filter((v) => {
+          if (v.player === 0) return true;
+          const ci = Math.floor(v.x) + Math.floor(v.y) * MAP_CELLS;
+          return v.building || v.node ? fog[ci] !== 0 : fog[ci] === 2;
+        })
+      : views;
+
+    // Damage events from hp diffs (visible entities only — fog stays honest).
+    const damage: DamageEvent[] = [];
+    for (const v of visible) {
+      const prev = prevHp.get(v.eid);
+      if (prev !== undefined && v.hp < prev) {
+        damage.push({ victim: v, amount: prev - v.hp });
+        if (v.player === 0) minimap.ping(v.x, v.y);
+      }
+    }
+    prevHp.clear();
+    for (const v of views) prevHp.set(v.eid, v.hp);
+    if (damage.length > 0) (damage.some((d) => d.victim.building) ? sfx.hit : sfx.zap)();
+
     game.updateUnits(views, now / 1000, host.fog);
+    unitRenderer.update(visible, now, audio.beatPhase());
+    effects.update(damage, visible, now);
+    dressing.pulse(audio.beatPhase(), host.night);
     game.updateSelection(views, controls.selected);
     minimap.update(views, host.fog, now);
+    panel.update(views);
     game.scene.clearColor = skyAt(host.tick);
     game.scene.render();
+
+    // Hero moments: ability casts, THE DROP, level-ups.
+    const hs = host.hero;
+    const heroView = views.find((v) => v.eid === hs.eid);
+    if (heroView) {
+      if (hs.cds[0] > prevCds[0] + 60) {
+        sfx.airhorn();
+        effects.ring(heroView.x, heroView.y, 2.5, [1, 0.9, 0.4]);
+      }
+      if (hs.cds[3] > prevCds[3] + 600) {
+        sfx.drop();
+        effects.dropFlash();
+        effects.ring(heroView.x, heroView.y, 7, [1, 1, 1]);
+      }
+      if (hs.level > prevLevel) {
+        sfx.levelUp();
+        effects.ring(heroView.x, heroView.y, 3, [0.7, 0.55, 1]);
+      }
+      prevLevel = hs.level;
+    }
+    prevCds = [...hs.cds] as [number, number, number, number];
 
     if (host.raidsSpawned > lastRaids) {
       lastRaids = host.raidsSpawned;
@@ -146,6 +211,7 @@ async function boot(): Promise<void> {
 
     if (host.matchState !== 0 && !ended) {
       ended = true;
+      sfx.stinger(host.matchState === 1);
       if (!isReplay) localStorage.setItem(REPLAY_KEY, encodeReplay(host.buildReplay()));
       showMatchEnd(host.matchState === 1, isReplay);
     }

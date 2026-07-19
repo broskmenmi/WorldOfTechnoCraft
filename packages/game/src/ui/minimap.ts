@@ -14,6 +14,12 @@ export class Minimap {
   private ctx: CanvasRenderingContext2D;
   private walls: HTMLCanvasElement;
   private lastDraw = 0;
+  private pings: Array<{ x: number; y: number; at: number }> = [];
+
+  /** Flash a damage ping at a world position. */
+  ping(x: number, y: number): void {
+    if (this.pings.length < 40) this.pings.push({ x, y, at: performance.now() });
+  }
 
   constructor(
     private grid: WalkGrid,
@@ -78,17 +84,44 @@ export class Minimap {
     for (const v of views) {
       if (fog && v.player !== 0) {
         const ci = Math.floor(v.x) + Math.floor(v.y) * grid.w;
-        const seen = v.building ? fog[ci] !== 0 : fog[ci] === 2;
+        const seen = v.building || v.node ? fog[ci] !== 0 : fog[ci] === 2;
         if (!seen) continue;
+      }
+      if (v.node) {
+        ctx.fillStyle = v.kind === 300 ? '#ffd94d' : '#a5744d';
+        ctx.fillRect(v.x * s - 1.5, v.y * s - 1.5, 3, 3);
+        continue;
       }
       ctx.fillStyle = TEAM_COLORS[v.player % TEAM_COLORS.length]!;
       if (v.building) {
         const def = BUILDINGS_BY_ID.get(v.kind);
         const w = (def?.w ?? 2) * s;
         ctx.fillRect(v.x * s - w / 2, v.y * s - w / 2, w, w);
+      } else if (v.hero) {
+        // Heroes get a star-ish diamond.
+        ctx.save();
+        ctx.translate(v.x * s, v.y * s);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = v.player === 0 ? '#ffffff' : '#ffb0e0';
+        ctx.fillRect(-2.5, -2.5, 5, 5);
+        ctx.restore();
       } else {
         ctx.fillRect(v.x * s - 1, v.y * s - 1, 2, 2);
       }
+    }
+
+    // Damage pings: expanding red blips.
+    for (let i = this.pings.length - 1; i >= 0; i--) {
+      const p = this.pings[i]!;
+      const age = (now - p.at) / 900;
+      if (age >= 1) {
+        this.pings.splice(i, 1);
+        continue;
+      }
+      ctx.strokeStyle = `rgba(255,70,70,${1 - age})`;
+      ctx.beginPath();
+      ctx.arc(p.x * s, p.y * s, 2 + age * 7, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     // Camera indicator.

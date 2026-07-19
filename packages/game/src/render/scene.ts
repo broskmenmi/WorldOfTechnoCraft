@@ -48,8 +48,6 @@ export interface GameScene {
   ping(x: number, y: number, kind: 'move' | 'attack'): void;
 }
 
-/** Beats per second at the canonical 128 BPM. */
-const BEAT_HZ = 128 / 60;
 
 export function createGameScene(
   engine: AbstractEngine,
@@ -116,17 +114,9 @@ export function createGameScene(
     wallMesh.thinInstanceSetBuffer('matrix', new Float32Array(wallMats), 16, true);
   }
 
-  // Units: one box mesh, thin instances, per-instance color.
-  const unitMesh = MeshBuilder.CreateBox('unit', { width: 0.6, depth: 0.6, height: 1.1 }, scene);
-  const unitMat = new StandardMaterial('unitMat', scene);
-  unitMat.emissiveColor = new Color3(0.25, 0.25, 0.25);
-  unitMat.specularColor = Color3.Black();
-  unitMesh.material = unitMat;
-  unitMesh.thinInstanceRegisterAttribute('color', 4);
-
+  // Mobile units are drawn by UnitRenderer (render/units.ts) — this scene
+  // handles structures (buildings/nodes), health bars, fog, and overlays.
   let capacity = 0;
-  let matrices = new Float32Array(0);
-  let colors = new Float32Array(0);
   const tmp = Matrix.Identity();
 
   // Buildings: a second box batch, footprint-scaled, dimmed while building.
@@ -151,10 +141,9 @@ export function createGameScene(
   let barColors = new Float32Array(0);
 
   function updateUnits(units: UnitView[], timeSec: number, fog?: Uint8Array | null): void {
+    void timeSec;
     if (units.length > capacity) {
       capacity = Math.max(64, units.length * 2);
-      matrices = new Float32Array(capacity * 16);
-      colors = new Float32Array(capacity * 4);
       barMatrices = new Float32Array(capacity * 16);
       barColors = new Float32Array(capacity * 4);
     }
@@ -162,8 +151,6 @@ export function createGameScene(
       bldMatrices = new Float32Array(units.length * 32);
       bldColors = new Float32Array(units.length * 8);
     }
-    const beat = timeSec * BEAT_HZ * Math.PI;
-    let n = 0;
     let bars = 0;
     let blds = 0;
     for (const u of units) {
@@ -202,21 +189,8 @@ export function createGameScene(
         bldColors[blds * 4 + 2] = b * dim;
         bldColors[blds * 4 + 3] = 1;
         blds++;
-      } else {
-        // Everybody dances: a per-unit phase-offset bounce on the beat.
-        const bounce = Math.abs(Math.sin(beat + u.eid * 0.7));
-        const squash = 1 + bounce * 0.25;
-        Matrix.ScalingToRef(1, squash, 1, tmp);
-        tmp.setTranslationFromFloats(u.x, 0.55 * squash + bounce * 0.15, u.y);
-        tmp.copyToArray(matrices, n * 16);
-        const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
-        colors[n * 4] = r;
-        colors[n * 4 + 1] = g;
-        colors[n * 4 + 2] = b;
-        colors[n * 4 + 3] = 1;
-        n++;
       }
-      if (u.maxHp > 0 && u.hp < u.maxHp) {
+      if (!u.node && u.maxHp > 0 && u.hp < u.maxHp) {
         const frac = Math.max(0, u.hp / u.maxHp);
         const barY = u.building ? 3.4 : 1.7;
         Matrix.ScalingToRef(frac * (u.building ? 2 : 1), 1, 1, tmp);
@@ -229,9 +203,6 @@ export function createGameScene(
         bars++;
       }
     }
-    unitMesh.thinInstanceSetBuffer('matrix', matrices.subarray(0, n * 16), 16, false);
-    unitMesh.thinInstanceSetBuffer('color', colors.subarray(0, n * 4), 4, false);
-    unitMesh.thinInstanceCount = n;
     if (blds > 0) {
       buildingMesh.setEnabled(true);
       buildingMesh.thinInstanceSetBuffer('matrix', bldMatrices.subarray(0, blds * 16), 16, false);
