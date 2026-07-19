@@ -1,5 +1,11 @@
 # Roadmap — v1 Single-Player Skirmish
 
+> **Status (2026-07-19):** M0–M7 complete; M8/M9 core complete (minimap,
+> synthesized soundtrack, barks, Legion wave AI, Sunrise win/lose, replays).
+> Remaining for v1: M10 polish (balance pass, silhouette pass, loading screen,
+> deploy + `docs/playtest.md` run) plus M8 leftovers (BPM fader presets,
+> selection/build panel in the HUD, F3 perf HUD).
+
 V1 target: a full single-player skirmish — **Konkrete Door-State** (player, defensive club theocracy) vs **Legion of Rotterdam** (AI gabber rush) — survive to Sunrise with your Dancefloor alive; lose if The Door falls.
 
 ## V1 content subset
