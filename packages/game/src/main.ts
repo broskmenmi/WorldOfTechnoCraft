@@ -1,6 +1,4 @@
-import { buildMap, decodeReplay, encodeReplay, FP, type MapId } from '@wotc/sim';
-import { BUILDINGS, DOOR_POLICIES, UNITS } from '@wotc/data';
-import type { CommandInput } from './protocol.ts';
+import { buildMap, CYCLE_TICKS, DAY_TICKS, decodeReplay, encodeReplay, type MapId } from '@wotc/sim';
 import { Controls } from './input/controls.ts';
 import { createGameEngine } from './render/engine.ts';
 import { createGameScene } from './render/scene.ts';
@@ -12,7 +10,7 @@ import { setupHelp } from './ui/help.ts';
 import { TechnoEngine } from './audio/techno.ts';
 import { Color4 } from '@babylonjs/core/Maths/math.color';
 
-const MAP_ID: MapId = 'skirmish01';
+const MAP_ID: MapId = 'skirmish02';
 const MAP_CELLS = 256;
 const REPLAY_KEY = 'wotc-replay';
 
@@ -26,64 +24,46 @@ function badge(): HTMLDivElement {
   return el;
 }
 
-/** The Powerplant forecourt scenario: your club on the south floor,
- * the Legion warcamp beyond the wall. */
-function scenario(): CommandInput[] {
-  const inputs: CommandInput[] = [];
-  const p = (i: CommandInput) => inputs.push(i);
-  p({ playerId: 0, type: 'grant', cash: 400, vibe: 0 });
-  p({ playerId: 0, type: 'spawnBuilding', kind: BUILDINGS.the_door.id, cellX: 116, cellY: 196 });
-  p({ playerId: 0, type: 'spawnBuilding', kind: BUILDINGS.dancefloor.id, cellX: 104, cellY: 188 });
-  p({ playerId: 0, type: 'spawnBuilding', kind: BUILDINGS.bar.id, cellX: 128, cellY: 190 });
-  for (let i = 0; i < 6; i++) {
-    p({ playerId: 0, type: 'spawn', kind: UNITS.clubgoer.id, x: (105 + (i % 3) * 2) * FP, y: (186 - Math.floor(i / 3) * 2) * FP });
-  }
-  for (let i = 0; i < 2; i++) {
-    p({ playerId: 0, type: 'spawn', kind: UNITS.cable_guy.id, x: (122 + i * 2) * FP, y: 194 * FP });
-  }
-  for (let i = 0; i < 4; i++) {
-    p({ playerId: 0, type: 'spawn', kind: UNITS.bouncer.id, x: (114 + i * 3) * FP, y: 180 * FP });
-  }
-  p({ playerId: 1, type: 'spawnBuilding', kind: BUILDINGS.warcamp.id, cellX: 118, cellY: 30 });
-  for (let i = 0; i < 6; i++) {
-    p({ playerId: 1, type: 'spawn', kind: UNITS.gabber.id, x: (112 + (i % 3) * 4) * FP, y: (40 + Math.floor(i / 3) * 3) * FP });
-  }
-  return inputs;
-}
-
-function fmtClock(ticksLeft: number): string {
-  const s = Math.max(0, Math.ceil(ticksLeft / 20));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function showMatchEnd(won: boolean, peakVibe: number, isReplay: boolean): void {
+function showMatchEnd(won: boolean, isReplay: boolean): void {
   const el = document.createElement('div');
   el.style.cssText =
     'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
     'flex-direction:column;background:#000a;pointer-events:auto;font-family:monospace;text-align:center';
   el.innerHTML = won
-    ? `<div style="font-size:42px;color:#ffd75f">☀ SUNRISE ☀</div>
-       <div style="font-size:16px;color:#e8e8e8;margin:12px">You held the floor. The shutters snap open to a roar.</div>
-       <div style="font-size:14px;color:#7fff9f">Peak Vibe: ${peakVibe}</div>`
-    : `<div style="font-size:42px;color:#ff5f5f">THE DOOR HAS FALLEN</div>
-       <div style="font-size:16px;color:#e8e8e8;margin:12px">The club is a memory. Somewhere, a purist says it was better before.</div>`;
+    ? `<div style="font-size:42px;color:#ffd75f">THE WARCAMP HAS FALLEN</div>
+       <div style="font-size:16px;color:#e8e8e8;margin:12px">Rotterdam is quiet. Somewhere, one last hug is exchanged.<br>Your club stands. The scene is yours.</div>`
+    : `<div style="font-size:42px;color:#ff5f5f">THE CLUB IS RUBBLE</div>
+       <div style="font-size:16px;color:#e8e8e8;margin:12px">The Legion renamed the ruins "Amsterdam?" and hugged everyone on the way out.</div>`;
   const hint = document.createElement('div');
   hint.style.cssText = 'font-size:12px;color:#888;margin-top:16px';
   hint.textContent = isReplay
     ? 'replay finished — reload without ?replay to play'
-    : 'F5 to run it back · F9 saved a replay of this night';
+    : 'F5 to run it back · F9 saved a replay of this match';
   el.appendChild(hint);
   document.getElementById('hud')?.appendChild(el);
 }
 
-const NIGHT = new Color4(0.03, 0.03, 0.045, 1);
-const PREDAWN = new Color4(0.1, 0.05, 0.12, 1);
-const DAWN = new Color4(0.45, 0.22, 0.12, 1);
+// Day/night sky: warm dusk → deep night → dawn, cycling with the sim clock.
+const DAY = new Color4(0.09, 0.08, 0.12, 1);
+const NIGHT = new Color4(0.02, 0.02, 0.04, 1);
 
-function skyAt(t: number): Color4 {
+function skyAt(tick: number): Color4 {
+  const t = tick % CYCLE_TICKS;
   const lerp = (a: Color4, b: Color4, f: number) =>
     new Color4(a.r + (b.r - a.r) * f, a.g + (b.g - a.g) * f, a.b + (b.b - a.b) * f, 1);
-  return t < 0.7 ? lerp(NIGHT, PREDAWN, t / 0.7) : lerp(PREDAWN, DAWN, (t - 0.7) / 0.3);
+  if (t < DAY_TICKS) {
+    // Daytime with a dusk ramp in the last 10%.
+    const dusk = t > DAY_TICKS * 0.9 ? (t - DAY_TICKS * 0.9) / (DAY_TICKS * 0.1) : 0;
+    return lerp(DAY, NIGHT, dusk);
+  }
+  const nt = (t - DAY_TICKS) / (CYCLE_TICKS - DAY_TICKS);
+  // Night with a dawn ramp in the last 15%.
+  const dawn = nt > 0.85 ? (nt - 0.85) / 0.15 : 0;
+  return lerp(NIGHT, DAY, dawn);
+}
+
+function fmtCd(ticks: number): string {
+  return ticks > 0 ? ` ${Math.ceil(ticks / 20)}s` : '';
 }
 
 async function boot(): Promise<void> {
@@ -93,7 +73,6 @@ async function boot(): Promise<void> {
   const game = createGameScene(engine, MAP_CELLS, grid);
   const hud = badge();
 
-  // Replay playback: ?replay=local loads the last F9-saved replay.
   const isReplay = new URLSearchParams(location.search).get('replay') === 'local';
   let replayCommands = null;
   if (isReplay) {
@@ -102,11 +81,12 @@ async function boot(): Promise<void> {
   }
 
   const host = new SimHost();
-  if (!isReplay) host.onReady = () => host.issue(...scenario());
+  if (!isReplay) host.onReady = () => host.issue({ playerId: 0, type: 'setup' });
   host.start(replayCommands?.seed ?? 1337, (replayCommands?.mapId as MapId) ?? MAP_ID, replayCommands?.commands);
 
-  game.camera.position.x = 120;
-  game.camera.position.z = 160;
+  // Start over the player's base (SW corner of skirmish02).
+  game.camera.position.x = 52;
+  game.camera.position.z = 178;
 
   const barks = new BarkFeed();
   const audio = new TechnoEngine();
@@ -127,14 +107,12 @@ async function boot(): Promise<void> {
       a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
       a.download = `wotc-replay-${Date.now()}.json`;
       a.click();
-      barks.event('buildingComplete');
     }
   });
 
   const views: UnitView[] = [];
   let lastFog: Uint8Array | null = null;
   let lastRaids = 0;
-  let lastWaves = 0;
   let ended = false;
 
   engine.runRenderLoop(() => {
@@ -148,44 +126,48 @@ async function boot(): Promise<void> {
     game.updateUnits(views, now / 1000, host.fog);
     game.updateSelection(views, controls.selected);
     minimap.update(views, host.fog, now);
-    game.scene.clearColor = skyAt(Math.min(1, host.tick / host.sunriseTick));
+    game.scene.clearColor = skyAt(host.tick);
     game.scene.render();
 
-    // Events → barks + music intensity.
     if (host.raidsSpawned > lastRaids) {
       lastRaids = host.raidsSpawned;
       barks.event('raidIncoming');
     }
-    if (host.wavesSpawned > lastWaves) {
-      lastWaves = host.wavesSpawned;
-      barks.event('underAttack');
-    }
-    const doorView = views.find((v) => v.building && v.kind === BUILDINGS.the_door.id && v.player === 0);
-    let danger = false;
-    if (doorView) {
-      danger = views.some(
-        (v) => v.player === 1 && !v.building && Math.hypot(v.x - doorView.x, v.y - doorView.y) < 45,
-      );
-    }
-    audio.intensity = danger ? (host.heat >= 100 ? 3 : 2) : 1;
+    // Music intensity: enemies near own buildings = danger.
+    const ownBuildings = views.filter((v) => v.building && v.player === 0);
+    const danger = views.some(
+      (v) =>
+        v.player !== 0 &&
+        !v.building &&
+        !v.node &&
+        ownBuildings.some((b) => Math.hypot(v.x - b.x, v.y - b.y) < 30),
+    );
+    audio.intensity = danger ? (host.night ? 3 : 2) : 1;
 
     if (host.matchState !== 0 && !ended) {
       ended = true;
       if (!isReplay) localStorage.setItem(REPLAY_KEY, encodeReplay(host.buildReplay()));
-      showMatchEnd(host.matchState === 1, host.peakVibe, isReplay);
+      showMatchEnd(host.matchState === 1, isReplay);
     }
 
     touchBar?.update();
+    const h = host.hero;
+    const heroLine =
+      h.eid !== 0
+        ? `DJ lvl ${h.level}  xp ${h.xp}/${h.xpNext}  hype ${h.hype}/${h.hypeMax}` +
+          `  Q${fmtCd(h.cds[0])} W${fmtCd(h.cds[1])} E${fmtCd(h.cds[2])} R${fmtCd(h.cds[3])}`
+        : `DJ DOWN — press G to revive (€${h.reviveCost})`;
     const build = controls.buildModeName();
     const status =
-      `cash €${host.cash}  vibe ${host.vibe}  heat ${host.heat}  door: ${DOOR_POLICIES[host.policy]?.name ?? '?'}\n` +
-      `☀ sunrise in ${fmtClock(host.sunriseTick - host.tick)}   wave ${host.wavesSpawned}  raids ${host.raidsSpawned}\n` +
+      `€${host.cash}  gear ${host.gear}  headroom ${host.headroomUsed}/${host.headroomCap}` +
+      `  tier ${host.tier}  heat ${host.heat}  ${host.night ? '🌙 night' : '☀ day'}\n` +
+      `${heroLine}\n` +
       `selected ${controls.selected.size}${controls.attackMovePending ? '  [A-MOVE]' : ''}${build ? `  [BUILD: ${build}]` : ''}`;
     hud.textContent = touch
       ? status
       : `World of TechnoCraft — ${backend}  fps ${engine.getFps().toFixed(0)}  tick ${host.tick}${isReplay ? '  [REPLAY]' : ''}\n` +
         status +
-        `\nLMB select · RMB move/rally · shift queue · A attack-move · B build · P door policy · M mute · F9 replay · ? help`;
+        `\nRMB move/harvest · A attack-move · B build · T/Y/U/I train · V tier up · Q/W/E/R hero · G revive · P door · M mute · ? help`;
   });
 
   window.addEventListener('resize', () => engine.resize());

@@ -8,7 +8,7 @@
 // stays the complete record and replays reproduce the exact same movement.
 
 import { FP, isWalkable, type WalkGrid } from '@wotc/sim';
-import { BUILDINGS, BUILDINGS_BY_ID, UNITS, UNITS_BY_ID } from '@wotc/data';
+import { BUILDINGS, BUILDINGS_BY_ID, UNITS_BY_ID } from '@wotc/data';
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
@@ -20,12 +20,14 @@ import type { SimHost, UnitView } from '../simHost.ts';
 
 /** Buildable roster for the player faction, cycled with B. */
 const BUILDABLE = [
-  BUILDINGS.dancefloor,
-  BUILDINGS.bar,
-  BUILDINGS.speaker_stack,
+  BUILDINGS.monitor_stack,
   BUILDINGS.booth,
+  BUILDINGS.speaker_stack,
   BUILDINGS.smoke_machine,
 ];
+
+/** Q/W/E/R → ability slots. */
+const ABILITY_KEYS: Record<string, number> = { KeyQ: 0, KeyW: 1, KeyE: 2, KeyR: 3 };
 
 /** Training hotkeys: T/Y/U/I map to the selected building's trains[0..3]. */
 const TRAIN_KEYS: Record<string, number> = { KeyT: 0, KeyY: 1, KeyU: 2, KeyI: 3 };
@@ -43,6 +45,8 @@ interface Waypoint {
 export class Controls {
   readonly selected = new Set<number>();
   attackMovePending = false;
+  /** Touch: armed ability slot waiting for a target tap, or -1. */
+  abilityPending = -1;
   /** Index into BUILDABLE while in build-placement mode, or -1. */
   buildMode = -1;
 
@@ -92,6 +96,11 @@ export class Controls {
   /** Called each frame with the latest interpolated views. */
   setViews(views: UnitView[]): void {
     this.views = views;
+  }
+
+  /** Latest hero status from the sim (for UI). */
+  get heroInfo() {
+    return this.host.hero;
   }
 
   // ── Selection ─────────────────────────────────────────────────────────────
@@ -225,6 +234,12 @@ export class Controls {
         this.boxSelect(start, e, false);
         return;
       }
+      // Armed ability: this tap is the target.
+      if (this.abilityPending >= 0) {
+        this.castAbility(this.abilityPending, e.clientX, e.clientY);
+        this.abilityPending = -1;
+        return;
+      }
       // Tap: select a unit if one is under the finger; otherwise, with a
       // selection active, the tap IS the order (touch has no right-click).
       const hit = this.selectableAt(e.clientX, e.clientY);
@@ -293,10 +308,40 @@ export class Controls {
     return this.views.some((v) => v.eid === eid && v.building);
   }
 
+  /** A resource-node view near a world point, if any. */
+  private nodeAt(x: number, y: number): UnitView | null {
+    let best: UnitView | null = null;
+    let bestD = 2.2;
+    for (const v of this.views) {
+      if (!v.node) continue;
+      const d = Math.hypot(v.x - x, v.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    return best;
+  }
+
   private issueOrder(px: number, py: number, queue: boolean): void {
     const target = this.groundPoint(px, py);
     if (!target) return;
     const alive = [...this.selected].filter((eid) => this.host.isAlive(eid));
+
+    // Right-clicking a resource node with workers selected = go harvest.
+    const node = this.nodeAt(target.x, target.y);
+    if (node) {
+      const workers = alive.filter((eid) => {
+        const v = this.views.find((view) => view.eid === eid);
+        return v && !v.building && (UNITS_BY_ID.get(v.kind)?.isHarvester ?? false);
+      });
+      if (workers.length > 0) {
+        this.host.issue({ playerId: PLAYER_ID, type: 'harvest', unitIds: workers, nodeId: node.eid });
+        this.game.ping(node.x, node.y, 'move');
+        blipOrder();
+        return;
+      }
+    }
     // Buildings get a rally point instead of a move order.
     const buildings = alive.filter((eid) => this.isBuildingEid(eid));
     for (const b of buildings) {
@@ -423,9 +468,9 @@ export class Controls {
   }
 
   private findBuilder(): number | null {
-    // Prefer a selected Cable Guy, else any own idle one.
+    // Prefer a selected worker, else any own one.
     const isBuilderView = (v: UnitView) =>
-      v.player === PLAYER_ID && !v.building && v.kind === UNITS.cable_guy.id;
+      v.player === PLAYER_ID && !v.building && !v.node && (UNITS_BY_ID.get(v.kind)?.isBuilder ?? false);
     const selected = this.views.find((v) => this.selected.has(v.eid) && isBuilderView(v));
     if (selected) return selected.eid;
     const any = this.views.find(isBuilderView);
@@ -472,10 +517,84 @@ export class Controls {
     if (e.code === 'KeyA') this.attackMovePending = true;
     if (e.code === 'KeyB') this.cycleBuild();
     if (e.code === 'KeyP') this.cyclePolicy();
+    if (e.code === 'KeyV') this.upgradeSelected();
+    if (e.code === 'KeyG') this.revive();
+    const abilitySlot = ABILITY_KEYS[e.code];
+    if (abilitySlot !== undefined && this.selectedHero()) {
+      this.castAbility(abilitySlot, this.lastPointer.x, this.lastPointer.y);
+      return; // Q/W/E/R are ability keys while a hero is selected
+    }
     const trainSlot = TRAIN_KEYS[e.code];
     if (trainSlot !== undefined) this.train(trainSlot);
     if (e.code === 'Escape') this.cancel();
     if (e.code === 'KeyH') this.stopSelected();
+  }
+
+  // ── Hero ──────────────────────────────────────────────────────────────────
+
+  /** The selected own hero view, if any. */
+  selectedHero(): UnitView | null {
+    return (
+      this.views.find((v) => this.selected.has(v.eid) && v.hero && v.player === PLAYER_ID) ?? null
+    );
+  }
+
+  /**
+   * Cast ability `slot` — targeted abilities aim at the given SCREEN point
+   * (self-centered ones ignore it). Returns true if a command was issued.
+   */
+  castAbility(slot: number, screenX: number, screenY: number): boolean {
+    const hero = this.selectedHero();
+    if (!hero) return false;
+    if (this.host.hero.cds[slot] !== undefined && this.host.hero.cds[slot]! > 0) return false;
+    const ground = this.groundPoint(screenX, screenY) ?? { x: hero.x, y: hero.y };
+    this.host.issue({
+      playerId: PLAYER_ID,
+      type: 'ability',
+      heroId: hero.eid,
+      slot,
+      x: Math.round(ground.x * FP),
+      y: Math.round(ground.y * FP),
+    });
+    this.game.ping(ground.x, ground.y, 'attack');
+    blipOrder();
+    return true;
+  }
+
+  /** Upgrade the selected HQ to the next tier. */
+  upgradeSelected(): boolean {
+    const building = this.views.find(
+      (v) => this.selected.has(v.eid) && v.building && v.player === PLAYER_ID,
+    );
+    if (!building) return false;
+    if ((BUILDINGS_BY_ID.get(building.kind)?.upgradesTo ?? 0) === 0) return false;
+    this.host.issue({ playerId: PLAYER_ID, type: 'upgrade', buildingId: building.eid });
+    blipOrder();
+    return true;
+  }
+
+  /** True if the selected building can tier up (for UI). */
+  canUpgradeSelected(): boolean {
+    const building = this.views.find(
+      (v) => this.selected.has(v.eid) && v.building && v.player === PLAYER_ID,
+    );
+    return !!building && (BUILDINGS_BY_ID.get(building.kind)?.upgradesTo ?? 0) !== 0;
+  }
+
+  revive(): void {
+    if (this.host.hero.eid !== 0) return;
+    this.host.issue({ playerId: PLAYER_ID, type: 'revive' });
+    blipOrder();
+  }
+
+  /** Touch button entry point: self-cast W/R immediately, arm Q/E for a tap. */
+  touchAbility(slot: number): void {
+    if (!this.selectedHero()) return;
+    if (slot === 1 || slot === 3) {
+      this.castAbility(slot, -1, -1); // groundPoint misses → hero-centered
+    } else {
+      this.abilityPending = this.abilityPending === slot ? -1 : slot;
+    }
   }
 
   // ── Actions (shared by keyboard and the touch bar) ────────────────────────

@@ -17,15 +17,19 @@ import '@babylonjs/core/Meshes/thinInstanceMesh';
 import '@babylonjs/core/Culling/ray';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { isWalkable, type WalkGrid } from '@wotc/sim';
-import { BUILDINGS_BY_ID } from '@wotc/data';
+import { BUILDINGS_BY_ID, NODES_BY_ID } from '@wotc/data';
 import type { UnitView } from '../simHost.ts';
 
 const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
   [0.35, 1.0, 0.55], // player 0: neon green
   [1.0, 0.3, 0.75], // player 1: hot magenta
-  [0.3, 0.75, 1.0], // player 2: cyan
-  [1.0, 0.8, 0.25], // player 3: amber
+  [0.75, 0.72, 0.62], // player 2: neutral bone (creeps)
+  [1.0, 0.8, 0.25], // amber (spare)
 ];
+const NODE_COLORS: Record<string, [number, number, number]> = {
+  cash: [1.0, 0.85, 0.3], // The Queue: gold
+  gear: [0.7, 0.5, 0.3], // Gear crates: road-case brown
+};
 
 export interface GameScene {
   scene: Scene;
@@ -167,19 +171,32 @@ export function createGameScene(
       // (Explored-but-dark enemy BUILDINGS stay visible — classic RTS rule.)
       if (fog && u.player !== 0) {
         const ci = Math.floor(u.x) + Math.floor(u.y) * mapCells;
-        const seen = u.building ? fog[ci] !== 0 : fog[ci] === 2;
+        const seen = u.building || u.node ? fog[ci] !== 0 : fog[ci] === 2;
         if (!seen) continue;
       }
-      if (u.building) {
-        const def = BUILDINGS_BY_ID.get(u.kind);
+      if (u.building || u.node) {
+        const def = u.node ? NODES_BY_ID.get(u.kind) : BUILDINGS_BY_ID.get(u.kind);
         const w = def?.w ?? 2;
         const h = def?.h ?? 2;
-        const height = u.progress < 100 ? 0.6 + (2.4 * u.progress) / 100 : 3;
+        // Nodes shrink as they deplete; buildings grow as they're built.
+        const height = u.node
+          ? 0.5 + (1.3 * u.progress) / 100
+          : u.progress < 100
+            ? 0.6 + (2.4 * u.progress) / 100
+            : 3;
         Matrix.ScalingToRef(w * 0.92, height, h * 0.92, tmp);
         tmp.setTranslationFromFloats(u.x, height / 2, u.y);
         tmp.copyToArray(bldMatrices, blds * 16);
-        const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
-        const dim = u.progress < 100 ? 0.35 : 0.85;
+        let r: number;
+        let g: number;
+        let b: number;
+        if (u.node) {
+          const kind = (NODES_BY_ID.get(u.kind)?.kind ?? 'gear') as 'cash' | 'gear';
+          [r, g, b] = NODE_COLORS[kind]!;
+        } else {
+          [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
+        }
+        const dim = !u.node && u.progress < 100 ? 0.35 : 0.85;
         bldColors[blds * 4] = r * dim;
         bldColors[blds * 4 + 1] = g * dim;
         bldColors[blds * 4 + 2] = b * dim;

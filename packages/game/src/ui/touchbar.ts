@@ -18,6 +18,9 @@ export class TouchBar {
   private attackBtn: HTMLDivElement;
   private buildBtn: HTMLDivElement;
   private trainBtns: HTMLDivElement[] = [];
+  private abilityBtns: HTMLDivElement[] = [];
+  private upgradeBtn: HTMLDivElement;
+  private reviveBtn: HTMLDivElement;
 
   constructor(
     private controls: Controls,
@@ -45,11 +48,21 @@ export class TouchBar {
     this.attackBtn = btn('⚔ ATTACK', () => controls.toggleAttackMove());
     btn('✋ STOP', () => controls.stopSelected());
     this.buildBtn = btn('🏗 BUILD', () => controls.cycleBuild());
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 4; i++) {
       const b = btn(`T${i + 1}`, () => controls.train(i));
       b.style.display = 'none';
       this.trainBtns.push(b);
     }
+    const abilityLabels = ['Q', 'W', 'E', 'R'];
+    for (let i = 0; i < 4; i++) {
+      const b = btn(abilityLabels[i]!, () => controls.touchAbility(i));
+      b.style.display = 'none';
+      this.abilityBtns.push(b);
+    }
+    this.upgradeBtn = btn('⬆ TIER', () => controls.upgradeSelected());
+    this.upgradeBtn.style.display = 'none';
+    this.reviveBtn = btn('💿 REVIVE', () => controls.revive());
+    this.reviveBtn.style.display = 'none';
     btn('🚪 DOOR', () => controls.cyclePolicy());
     btn('✕', () => controls.cancel());
     btn('🔊', () => audio.toggleMute());
@@ -67,5 +80,19 @@ export class TouchBar {
       b.style.display = name ? 'flex' : 'none';
       if (name) b.textContent = `＋ ${name.toUpperCase()}`;
     });
+    const heroSelected = !!this.controls.selectedHero();
+    const info = this.controls.heroInfo;
+    const labels = ['Q', 'W', 'E', 'R'];
+    this.abilityBtns.forEach((b, i) => {
+      b.style.display = heroSelected ? 'flex' : 'none';
+      if (!heroSelected) return;
+      const cd = info.cds[i] ?? 0;
+      b.textContent = cd > 0 ? `${labels[i]} ${Math.ceil(cd / 20)}s` : labels[i]!;
+      b.style.background =
+        this.controls.abilityPending === i ? '#a22c' : cd > 0 ? '#333c' : '#111c';
+    });
+    this.upgradeBtn.style.display = this.controls.canUpgradeSelected() ? 'flex' : 'none';
+    this.reviveBtn.style.display = info.eid === 0 && info.reviveCost > 0 ? 'flex' : 'none';
+    if (info.eid === 0) this.reviveBtn.textContent = `💿 REVIVE €${info.reviveCost}`;
   }
 }

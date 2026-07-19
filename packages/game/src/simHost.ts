@@ -7,6 +7,7 @@ import {
   SNAPSHOT_HEADER,
   SNAPSHOT_STRIDE,
   type CommandInput,
+  type HeroStatus,
   type HostToWorker,
   type WorkerToHost,
 } from './protocol.ts';
@@ -20,9 +21,12 @@ export interface UnitView {
   kind: number;
   moving: boolean;
   building: boolean;
+  node: boolean;
+  hero: boolean;
+  carrying: boolean;
   hp: number;
   maxHp: number;
-  /** Construction percent (100 for units/complete buildings). */
+  /** Construction percent, or remaining-reserve percent for nodes. */
   progress: number;
 }
 
@@ -55,17 +59,27 @@ export class SimHost {
   onSnapshot: (() => void) | null = null;
   /** Latest player-0 fog grid (0 unexplored / 1 explored / 2 visible). */
   fog: Uint8Array | null = null;
-  /** Latest player-0 resources. */
+  /** Latest player-0 state. */
   cash = 0;
-  vibe = 0;
+  gear = 0;
   heat = 0;
   policy = 1;
-  /** Match progress (mirrors the sim). */
+  headroomUsed = 0;
+  headroomCap = 0;
+  tier = 1;
+  night = false;
   matchState = 0;
-  sunriseTick = 12000;
   raidsSpawned = 0;
-  wavesSpawned = 0;
-  peakVibe = 0;
+  hero: HeroStatus = {
+    eid: 0,
+    level: 1,
+    xp: 0,
+    xpNext: 0,
+    hype: 0,
+    hypeMax: 0,
+    cds: [0, 0, 0, 0],
+    reviveCost: 0,
+  };
   /** The canonical stamped command record (replay = seed + map + this). */
   readonly commandLog: Command[] = [];
   private seed = 0;
@@ -82,14 +96,16 @@ export class SimHost {
         this.curr = parseSnapshot(msg.buffer, performance.now());
         if (msg.fog) this.fog = new Uint8Array(msg.fog);
         this.cash = msg.cash;
-        this.vibe = msg.vibe;
+        this.gear = msg.gear;
         this.heat = msg.heat;
         this.policy = msg.policy;
+        this.headroomUsed = msg.headroomUsed;
+        this.headroomCap = msg.headroomCap;
+        this.tier = msg.tier;
+        this.night = msg.night;
         this.matchState = msg.matchState;
-        this.sunriseTick = msg.sunriseTick;
         this.raidsSpawned = msg.raidsSpawned;
-        this.wavesSpawned = msg.wavesSpawned;
-        this.peakVibe = msg.peakVibe;
+        this.hero = msg.hero;
         this.flushOutbox();
         this.onSnapshot?.();
       } else if (msg.type === 'stamped') {
@@ -152,14 +168,18 @@ export class SimHost {
         x = px + (cx - px) * alpha;
         y = py + (cy - py) * alpha;
       }
+      const flags = curr.data[o + 5]!;
       out.push({
         eid,
         x: x / FP,
         y: y / FP,
         player: curr.data[o + 3]!,
         kind: curr.data[o + 4]!,
-        moving: (curr.data[o + 5]! & 1) === 1,
-        building: (curr.data[o + 5]! & 2) === 2,
+        moving: (flags & 1) !== 0,
+        building: (flags & 2) !== 0,
+        node: (flags & 4) !== 0,
+        hero: (flags & 8) !== 0,
+        carrying: (flags & 16) !== 0,
         hp: curr.data[o + 6]!,
         maxHp: curr.data[o + 7]!,
         progress: curr.data[o + 8]!,

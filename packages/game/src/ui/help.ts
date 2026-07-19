@@ -3,27 +3,32 @@
 
 const SEEN_KEY = 'wotc-help-seen';
 
-const GOAL = `<b style="color:#ffd75f">SURVIVE UNTIL SUNRISE.</b><br>
-You run the club at the bottom of the map. The Legion of Rotterdam attacks
-through the wall in escalating waves. If <b>The Door</b> (your HQ) falls, you lose.<br><br>
-<b>The loop:</b> Clubgoers dancing near your <b>Dancefloor</b> earn Vibe · the <b>Bar</b>
-earns Cash · spend both on buildings and units · <b>Speaker Stacks</b> extend vision
-but raise <b>Heat</b> — too much Heat and the police raid you · the <b>Door Policy</b>
-trades income against Heat · defend until dawn. Score = peak Vibe.`;
+const GOAL = `<b style="color:#ffd75f">RAZE THE WARCAMP. PROTECT THE CLUB.</b><br>
+Classic RTS rules: you win by destroying every Legion building (they're NE,
+beyond the wall); you lose when your last building falls. The Legion AI plays
+the same game you do — harvests, builds, tiers up, attacks.<br><br>
+<b>The economy:</b> Clubgoers haul <b>Cash</b> from <b>The Queue</b> (the gold line outside
+your door) and <b>Gear</b> from crate stacks — right-click/tap a node to put them
+to work. <b>Monitor Stacks</b> raise your Headroom (supply cap). Upgrade your HQ
+(<b>V</b>) to unlock tier-2 units. Your <b>Resident DJ</b> is a hero: earns XP from
+kills, levels up, casts Q/W/E/R — at level 6, <b>THE DROP</b>.<br>
+Neutral <b>creep camps</b> guard the middle: farm them for bounty + XP. At <b>night</b>
+everyone sees shorter. Speakers raise <b>Heat</b>; too much and the police raid.`;
 
-const DESKTOP = `<b>Mouse:</b> left-click/drag select · right-click move (rally for buildings) ·
-shift+right-click queue waypoints<br>
-<b>Keys:</b> A+right-click attack-move · B cycle building (click to place) · with a
-building selected T/Y/U/I train units · P door policy · H stop · ctrl+0-9 / 0-9
-control groups · double-click select-type · M mute · F9 save replay · Esc cancel<br>
-<b>Camera:</b> arrow keys pan · mouse wheel zoom · click the minimap to jump`;
+const DESKTOP = `<b>Mouse:</b> left-click/drag select · right-click move / harvest (on a node) /
+rally (buildings) · shift+right-click queue waypoints<br>
+<b>Keys:</b> A attack-move · B cycle building, click to place · T/Y/U/I train (building
+selected) · V tier upgrade · Q/W/E/R hero abilities (at the cursor) · G revive ·
+P door policy · H stop · ctrl+0-9 groups · M mute · F9 replay · Esc cancel<br>
+<b>Camera:</b> arrow keys pan · wheel zoom · click the minimap to jump`;
 
-const TOUCH = `<b>Touch:</b> tap a unit to select · drag a box to select many · with units
-selected, <b>tap the ground to move there</b> · tap an enemy area with ⚔ ATTACK armed
-to fight your way in<br>
-<b>Buttons:</b> ⚔ arm attack-move · ✋ stop · 🏗 cycle building then tap to place ·
-＋ buttons train (select one of your buildings first) · 🚪 door policy · ✕ cancel<br>
-<b>Camera:</b> two-finger drag to pan · pinch to zoom · tap the minimap to jump`;
+const TOUCH = `<b>Touch:</b> tap = select · drag = box select · with units selected,
+<b>tap the ground to move</b>, tap a gold/brown node to harvest · ⚔ then tap =
+attack-move<br>
+<b>Buttons:</b> ⚔ attack · ✋ stop · 🏗 build then tap to place · ＋ train (select a
+building) · Q/W/E/R hero abilities (Q/E arm, then tap the target) · ⬆ TIER ·
+💿 revive · 🚪 door policy · ✕ cancel<br>
+<b>Camera:</b> two-finger drag pan · pinch zoom · tap the minimap to jump`;
 
 export function setupHelp(touch: boolean): void {
   const btn = document.createElement('div');

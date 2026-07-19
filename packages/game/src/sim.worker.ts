@@ -2,13 +2,16 @@
 // Timers are allowed HERE (this file is presentation-side plumbing); the sim
 // package itself stays clock-free.
 
+import { HEROES_BY_UNIT_ID } from '@wotc/data';
 import {
-  buildingDef,
   createSim,
   hasComponent,
+  headroom,
   isAlive,
+  isNight,
   step,
   TICK_RATE,
+  tierOf,
   type Command,
   type SimWorld,
 } from '@wotc/sim';
@@ -16,6 +19,7 @@ import {
   SNAPSHOT_HEADER,
   SNAPSHOT_STRIDE,
   type CommandInput,
+  type HeroStatus,
   type HostToWorker,
   type WorkerToHost,
 } from './protocol.ts';
@@ -31,9 +35,9 @@ function post(msg: WorkerToHost, transfer?: Transferable[]): void {
   (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
 }
 
-/** Pack live entity state: [tick, count, (eid,x,y,player,kind,flags,hp,max,progressPct)*]. */
+/** Pack live entity state: [tick, count, (eid,x,y,player,kind,flags,hp,max,progress)*]. */
 function renderSnapshot(s: SimWorld): ArrayBuffer {
-  const { Position, Owner, Kind, MoveTarget, Health, Building } = s.c;
+  const { Position, Owner, Kind, MoveTarget, Health, Building, ResourceNode, Hero, Harvester } = s.c;
   const eids: number[] = [];
   for (let eid = 1; eid <= s.allocated; eid++) {
     if (isAlive(s, eid)) eids.push(eid);
@@ -44,22 +48,69 @@ function renderSnapshot(s: SimWorld): ArrayBuffer {
   let o = SNAPSHOT_HEADER;
   for (const eid of eids) {
     const isBuilding = hasComponent(s.world, eid, Building);
+    const isNode = hasComponent(s.world, eid, ResourceNode);
+    const isHero = hasComponent(s.world, eid, Hero);
+    const carrying = hasComponent(s.world, eid, Harvester) && Harvester.carry[eid]! > 0;
+    let kind: number;
+    let progress = 100;
+    if (isBuilding) {
+      kind = Building.kindId[eid]!;
+      progress =
+        Building.complete[eid] === 1
+          ? 100
+          : Math.min(99, Math.floor((Building.progress[eid]! * 100) / Math.max(1, buildingBuildTime(kind))));
+    } else if (isNode) {
+      kind = ResourceNode.defId[eid]!;
+      progress = Math.floor((ResourceNode.remaining[eid]! * 100) / Math.max(1, nodeReserve(kind)));
+    } else {
+      kind = Kind.id[eid]!;
+    }
     out[o++] = eid;
     out[o++] = Position.x[eid]!;
     out[o++] = Position.y[eid]!;
     out[o++] = Owner.player[eid]!;
-    out[o++] = isBuilding ? Building.kindId[eid]! : Kind.id[eid]!;
+    out[o++] = kind;
     out[o++] =
-      (!isBuilding && MoveTarget.active[eid] === 1 ? 1 : 0) | (isBuilding ? 2 : 0);
+      (!isBuilding && !isNode && MoveTarget.active[eid] === 1 ? 1 : 0) |
+      (isBuilding ? 2 : 0) |
+      (isNode ? 4 : 0) |
+      (isHero ? 8 : 0) |
+      (carrying ? 16 : 0);
     out[o++] = Health.hp[eid]!;
     out[o++] = Health.max[eid]!;
-    out[o++] = isBuilding
-      ? Building.complete[eid] === 1
-        ? 100
-        : Math.min(99, Math.floor((Building.progress[eid]! * 100) / buildingDef(Building.kindId[eid]!).buildTime))
-      : 100;
+    out[o++] = progress;
   }
   return out.buffer;
+}
+
+import { buildingDef, nodeDef } from '@wotc/sim';
+function buildingBuildTime(kind: number): number {
+  return buildingDef(kind).buildTime;
+}
+function nodeReserve(kind: number): number {
+  return nodeDef(kind).reserve;
+}
+
+function heroStatus(s: SimWorld): HeroStatus {
+  const { Hero } = s.c;
+  const eid = s.heroEid[0]!;
+  const kind = s.heroKind[0]!;
+  const def = HEROES_BY_UNIT_ID.get(kind);
+  const level = Math.max(1, s.heroLevel[0]!);
+  const reviveCost = def ? def.reviveBase + def.revivePerLevel * level : 0;
+  if (eid === 0 || !isAlive(s, eid) || !def) {
+    return { eid: 0, level, xp: s.heroXp[0]!, xpNext: def ? def.xpBase * level : 0, hype: 0, hypeMax: def?.hypeMax ?? 0, cds: [0, 0, 0, 0], reviveCost };
+  }
+  return {
+    eid,
+    level: Hero.level[eid]!,
+    xp: Hero.xp[eid]!,
+    xpNext: def.xpBase * Hero.level[eid]!,
+    hype: Math.floor(Hero.hype100[eid]! / 100),
+    hypeMax: def.hypeMax,
+    cds: [Hero.cd0[eid]!, Hero.cd1[eid]!, Hero.cd2[eid]!, Hero.cd3[eid]!],
+    reviveCost,
+  };
 }
 
 /** Send the local player's fog every 8 ticks (it only changes every 4). */
@@ -67,8 +118,6 @@ const FOG_SEND_INTERVAL = 8;
 
 function tickOnce(): void {
   if (!sim) return;
-  // Stamp queued inputs onto this tick — this stream is the canonical record.
-  // In replay mode the recorded stream IS the input.
   const commands: Command[] = replayByTick
     ? (replayByTick.get(sim.tick) ?? [])
     : pendingInputs.map((input) => ({ ...input, tick: sim!.tick }) as Command);
@@ -76,16 +125,19 @@ function tickOnce(): void {
   step(sim, commands);
   if (!replayByTick && commands.length > 0) post({ type: 'stamped', commands });
   const buffer = renderSnapshot(sim);
+  const hr = headroom(sim, 0);
   const resources = {
     cash: sim.cash[0]!,
-    vibe: sim.vibe[0]!,
+    gear: sim.gear[0]!,
     heat: sim.heat[0]!,
     policy: sim.policy[0]!,
+    headroomUsed: hr.used,
+    headroomCap: hr.cap,
+    tier: tierOf(sim, 0),
+    night: isNight(sim.tick),
     matchState: sim.matchState,
-    sunriseTick: sim.sunriseTick,
     raidsSpawned: sim.raidsSpawned,
-    wavesSpawned: sim.wavesSpawned,
-    peakVibe: sim.peakVibe,
+    hero: heroStatus(sim),
   };
   if (sim.tick % FOG_SEND_INTERVAL === 0) {
     const fog = sim.fog[0]!.slice().buffer;

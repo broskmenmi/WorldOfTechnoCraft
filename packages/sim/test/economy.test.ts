@@ -55,18 +55,18 @@ describe('harvest economy', () => {
 
   it('headroom blocks training beyond the cap', () => {
     const sim = createSim(3);
-    const hq = spawnBuilding(sim, 0, BUILDINGS.the_door.id, 50, 50, true); // +10 cap
+    const hq = spawnBuilding(sim, 0, BUILDINGS.the_door.id, 50, 50, true);
+    const cap = BUILDINGS.the_door.headroomProvided;
     sim.cash[0] = 10000;
-    // 10 cap / clubgoer costs 1 → queue plenty, only 10 total should ever exist.
+    // Clubgoers cost 1 headroom each → exactly `cap` total should ever exist.
     const cmds: Command[] = [];
-    for (let t = 0; t < 30; t++) {
+    for (let t = 0; t < cap + 20; t++) {
       cmds.push({ tick: t * 260, playerId: 0, type: 'train', buildingId: hq, kind: UNITS.clubgoer.id });
     }
-    run(sim, cmds, 30 * 260 + 400);
+    run(sim, cmds, (cap + 20) * 260 + 400);
     const hr = headroom(sim, 0);
-    expect(hr.cap).toBe(10);
-    expect(hr.used).toBeLessThanOrEqual(10);
-    expect(hr.used).toBe(10);
+    expect(hr.cap).toBe(cap);
+    expect(hr.used).toBe(cap);
   });
 
   it('tier gating: monk needs tier 2; HQ upgrade unlocks it', () => {
