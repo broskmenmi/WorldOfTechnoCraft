@@ -80,6 +80,11 @@ export class FlowFieldCache {
     private capacity = 32,
   ) {}
 
+  /** Invalidate everything (the walkability grid changed). */
+  clear(): void {
+    this.cache.clear();
+  }
+
   get(targetX: number, targetY: number): FlowField {
     const key = targetY * this.grid.w + targetX;
     const hit = this.cache.get(key);

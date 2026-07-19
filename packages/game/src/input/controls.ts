@@ -7,11 +7,28 @@
 // normal move command when the unit goes idle, so the stamped command stream
 // stays the complete record and replays reproduce the exact same movement.
 
-import { FP } from '@wotc/sim';
+import { FP, isWalkable, type WalkGrid } from '@wotc/sim';
+import { BUILDINGS, BUILDINGS_BY_ID, UNITS } from '@wotc/data';
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { Color3 } from '@babylonjs/core/Maths/math.color';
+import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
+import type { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { blipOrder, blipSelect } from '../audio/blip.ts';
 import type { GameScene } from '../render/scene.ts';
 import type { SimHost, UnitView } from '../simHost.ts';
+
+/** Buildable roster for the player faction, cycled with B. */
+const BUILDABLE = [
+  BUILDINGS.dancefloor,
+  BUILDINGS.bar,
+  BUILDINGS.speaker_stack,
+  BUILDINGS.booth,
+  BUILDINGS.smoke_machine,
+];
+
+/** Training hotkeys: T/Y/U/I map to the selected building's trains[0..3]. */
+const TRAIN_KEYS: Record<string, number> = { KeyT: 0, KeyY: 1, KeyU: 2, KeyI: 3 };
 
 const CLICK_RADIUS_PX = 16;
 const DRAG_THRESHOLD_PX = 5;
@@ -26,6 +43,8 @@ interface Waypoint {
 export class Controls {
   readonly selected = new Set<number>();
   attackMovePending = false;
+  /** Index into BUILDABLE while in build-placement mode, or -1. */
+  buildMode = -1;
 
   private groups = new Map<number, number[]>();
   private queues = new Map<number, Waypoint[]>();
@@ -34,11 +53,22 @@ export class Controls {
   private dragStart: { x: number; y: number } | null = null;
   private dragRect: HTMLDivElement;
   private views: UnitView[] = [];
+  private ghost: Mesh;
+  private ghostMat: StandardMaterial;
+  private lastPointer = { x: 0, y: 0 };
 
   constructor(
     private game: GameScene,
     private host: SimHost,
+    private grid: WalkGrid,
   ) {
+    this.ghost = MeshBuilder.CreateBox('ghost', { size: 1 }, game.scene);
+    this.ghostMat = new StandardMaterial('ghostMat', game.scene);
+    this.ghostMat.alpha = 0.45;
+    this.ghostMat.disableLighting = true;
+    this.ghost.material = this.ghostMat;
+    this.ghost.isPickable = false;
+    this.ghost.setEnabled(false);
     this.dragRect = document.createElement('div');
     this.dragRect.style.cssText =
       'position:fixed;border:1px solid #7fff9f;background:#7fff9f22;display:none;pointer-events:none';
@@ -97,13 +127,23 @@ export class Controls {
 
   private onPointerDown(e: PointerEvent): void {
     if (e.button === 0) {
+      if (this.buildMode >= 0) {
+        this.placeBuilding(e.clientX, e.clientY, e.shiftKey);
+        return;
+      }
       this.dragStart = { x: e.clientX, y: e.clientY };
     } else if (e.button === 2) {
+      if (this.buildMode >= 0) {
+        this.exitBuildMode();
+        return;
+      }
       this.issueOrder(e.clientX, e.clientY, e.shiftKey);
     }
   }
 
   private onPointerMove(e: PointerEvent): void {
+    this.lastPointer = { x: e.clientX, y: e.clientY };
+    if (this.buildMode >= 0) this.updateGhost();
     if (!this.dragStart) return;
     const x0 = Math.min(this.dragStart.x, e.clientX);
     const y0 = Math.min(this.dragStart.y, e.clientY);
@@ -171,11 +211,33 @@ export class Controls {
     return { x: pick.pickedPoint.x, y: pick.pickedPoint.z };
   }
 
+  private isBuildingEid(eid: number): boolean {
+    return this.views.some((v) => v.eid === eid && v.building);
+  }
+
   private issueOrder(px: number, py: number, queue: boolean): void {
     const target = this.groundPoint(px, py);
     if (!target) return;
-    const unitIds = [...this.selected].filter((eid) => this.host.isAlive(eid));
-    if (unitIds.length === 0) return;
+    const alive = [...this.selected].filter((eid) => this.host.isAlive(eid));
+    // Buildings get a rally point instead of a move order.
+    const buildings = alive.filter((eid) => this.isBuildingEid(eid));
+    for (const b of buildings) {
+      this.host.issue({
+        playerId: PLAYER_ID,
+        type: 'rally',
+        buildingId: b,
+        x: Math.round(target.x * FP),
+        y: Math.round(target.y * FP),
+      });
+    }
+    const unitIds = alive.filter((eid) => !this.isBuildingEid(eid));
+    if (unitIds.length === 0) {
+      if (buildings.length > 0) {
+        this.game.ping(target.x, target.y, 'move');
+        blipOrder();
+      }
+      return;
+    }
 
     const mode = this.attackMovePending ? ('a' as const) : undefined;
     this.attackMovePending = false;
@@ -224,6 +286,93 @@ export class Controls {
     }
   }
 
+  // ── Build placement ───────────────────────────────────────────────────────
+
+  /** Human-readable current build selection for the HUD. */
+  buildModeName(): string | null {
+    return this.buildMode >= 0 ? BUILDABLE[this.buildMode]!.name : null;
+  }
+
+  private exitBuildMode(): void {
+    this.buildMode = -1;
+    this.ghost.setEnabled(false);
+  }
+
+  private ghostCell(): { cellX: number; cellY: number } | null {
+    const p = this.groundPoint(this.lastPointer.x, this.lastPointer.y);
+    if (!p) return null;
+    const def = BUILDABLE[this.buildMode]!;
+    return {
+      cellX: Math.round(p.x - def.w / 2),
+      cellY: Math.round(p.y - def.h / 2),
+    };
+  }
+
+  private footprintFree(cellX: number, cellY: number, w: number, h: number): boolean {
+    for (let y = cellY; y < cellY + h; y++) {
+      for (let x = cellX; x < cellX + w; x++) {
+        if (!isWalkable(this.grid, x, y)) return false;
+      }
+    }
+    // Approximate check against known buildings (sim revalidates anyway).
+    for (const v of this.views) {
+      if (!v.building) continue;
+      const def = BUILDINGS_BY_ID.get(v.kind);
+      if (!def) continue;
+      const bx = v.x - def.w / 2;
+      const by = v.y - def.h / 2;
+      if (cellX < bx + def.w && cellX + w > bx && cellY < by + def.h && cellY + h > by) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private updateGhost(): void {
+    const cell = this.ghostCell();
+    if (!cell) {
+      this.ghost.setEnabled(false);
+      return;
+    }
+    const def = BUILDABLE[this.buildMode]!;
+    const ok = this.footprintFree(cell.cellX, cell.cellY, def.w, def.h);
+    this.ghost.setEnabled(true);
+    this.ghost.scaling.set(def.w * 0.95, 2, def.h * 0.95);
+    this.ghost.position.set(cell.cellX + def.w / 2, 1, cell.cellY + def.h / 2);
+    this.ghostMat.emissiveColor = ok ? new Color3(0.2, 0.9, 0.4) : new Color3(0.9, 0.2, 0.2);
+  }
+
+  private findBuilder(): number | null {
+    // Prefer a selected Cable Guy, else any own idle one.
+    const isBuilderView = (v: UnitView) =>
+      v.player === PLAYER_ID && !v.building && v.kind === UNITS.cable_guy.id;
+    const selected = this.views.find((v) => this.selected.has(v.eid) && isBuilderView(v));
+    if (selected) return selected.eid;
+    const any = this.views.find(isBuilderView);
+    return any ? any.eid : null;
+  }
+
+  private placeBuilding(px: number, py: number, keepPlacing: boolean): void {
+    this.lastPointer = { x: px, y: py };
+    const cell = this.ghostCell();
+    if (!cell) return;
+    const def = BUILDABLE[this.buildMode]!;
+    if (!this.footprintFree(cell.cellX, cell.cellY, def.w, def.h)) return;
+    const builder = this.findBuilder();
+    if (builder === null) return;
+    this.host.issue({
+      playerId: PLAYER_ID,
+      type: 'build',
+      builderId: builder,
+      kind: def.id,
+      cellX: cell.cellX,
+      cellY: cell.cellY,
+    });
+    this.game.ping(cell.cellX + def.w / 2, cell.cellY + def.h / 2, 'move');
+    blipOrder();
+    if (!keepPlacing) this.exitBuildMode();
+  }
+
   // ── Keyboard ──────────────────────────────────────────────────────────────
 
   private onKeyDown(e: KeyboardEvent): void {
@@ -241,9 +390,31 @@ export class Controls {
       return;
     }
     if (e.code === 'KeyA') this.attackMovePending = true;
+    if (e.code === 'KeyB') {
+      this.buildMode = (this.buildMode + 1) % BUILDABLE.length;
+      this.updateGhost();
+    }
+    if (e.code === 'KeyP') {
+      this.host.issue({ playerId: PLAYER_ID, type: 'policy', value: (this.host.policy + 1) % 3 });
+    }
+    const trainSlot = TRAIN_KEYS[e.code];
+    if (trainSlot !== undefined) {
+      const building = this.views.find(
+        (v) => this.selected.has(v.eid) && v.building && v.player === PLAYER_ID,
+      );
+      if (building) {
+        const def = BUILDINGS_BY_ID.get(building.kind);
+        const kind = def?.trains[trainSlot];
+        if (kind !== undefined) {
+          this.host.issue({ playerId: PLAYER_ID, type: 'train', buildingId: building.eid, kind });
+          blipOrder();
+        }
+      }
+    }
     if (e.code === 'Escape') {
       this.attackMovePending = false;
-      this.selected.clear();
+      if (this.buildMode >= 0) this.exitBuildMode();
+      else this.selected.clear();
     }
     if (e.code === 'KeyH') {
       const unitIds = [...this.selected].filter((eid) => this.host.isAlive(eid));

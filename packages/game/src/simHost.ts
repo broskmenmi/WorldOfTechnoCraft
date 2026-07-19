@@ -19,8 +19,11 @@ export interface UnitView {
   player: number;
   kind: number;
   moving: boolean;
+  building: boolean;
   hp: number;
   maxHp: number;
+  /** Construction percent (100 for units/complete buildings). */
+  progress: number;
 }
 
 interface Snapshot {
@@ -52,6 +55,11 @@ export class SimHost {
   onSnapshot: (() => void) | null = null;
   /** Latest player-0 fog grid (0 unexplored / 1 explored / 2 visible). */
   fog: Uint8Array | null = null;
+  /** Latest player-0 resources. */
+  cash = 0;
+  vibe = 0;
+  heat = 0;
+  policy = 1;
 
   constructor() {
     this.worker = new Worker(new URL('./sim.worker.ts', import.meta.url), { type: 'module' });
@@ -63,6 +71,10 @@ export class SimHost {
         this.prev = this.curr;
         this.curr = parseSnapshot(msg.buffer, performance.now());
         if (msg.fog) this.fog = new Uint8Array(msg.fog);
+        this.cash = msg.cash;
+        this.vibe = msg.vibe;
+        this.heat = msg.heat;
+        this.policy = msg.policy;
         this.flushOutbox();
         this.onSnapshot?.();
       }
@@ -119,8 +131,10 @@ export class SimHost {
         player: curr.data[o + 3]!,
         kind: curr.data[o + 4]!,
         moving: (curr.data[o + 5]! & 1) === 1,
+        building: (curr.data[o + 5]! & 2) === 2,
         hp: curr.data[o + 6]!,
         maxHp: curr.data[o + 7]!,
+        progress: curr.data[o + 8]!,
       });
     }
     return out;

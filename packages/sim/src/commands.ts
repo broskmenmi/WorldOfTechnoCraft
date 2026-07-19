@@ -33,7 +33,72 @@ export interface StopCommand {
   unitIds: number[];
 }
 
-export type Command = SpawnCommand | MoveCommand | StopCommand;
+/** Start constructing a building; the builder walks over and works on it. */
+export interface BuildCommand {
+  tick: number;
+  playerId: number;
+  type: 'build';
+  builderId: number;
+  kind: number;
+  cellX: number;
+  cellY: number;
+}
+
+/** Scenario setup / cheats: place a finished building directly. */
+export interface SpawnBuildingCommand {
+  tick: number;
+  playerId: number;
+  type: 'spawnBuilding';
+  kind: number;
+  cellX: number;
+  cellY: number;
+}
+
+/** Queue a unit in a production building (cost deducted on enqueue). */
+export interface TrainCommand {
+  tick: number;
+  playerId: number;
+  type: 'train';
+  buildingId: number;
+  kind: number;
+}
+
+export interface RallyCommand {
+  tick: number;
+  playerId: number;
+  type: 'rally';
+  buildingId: number;
+  x: number;
+  y: number;
+}
+
+/** Door policy stance: 0 open, 1 selective, 2 locked. */
+export interface PolicyCommand {
+  tick: number;
+  playerId: number;
+  type: 'policy';
+  value: number;
+}
+
+/** Scenario setup / debug: grant resources. */
+export interface GrantCommand {
+  tick: number;
+  playerId: number;
+  type: 'grant';
+  cash: number;
+  vibe: number;
+}
+
+export type Command =
+  | SpawnCommand
+  | MoveCommand
+  | StopCommand
+  | BuildCommand
+  | SpawnBuildingCommand
+  | TrainCommand
+  | RallyCommand
+  | PolicyCommand
+  | GrantCommand;
 
 /** A recorded game: everything needed to reproduce it bit-for-bit. */
 export interface Replay {

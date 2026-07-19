@@ -3,7 +3,9 @@
 // package itself stays clock-free.
 
 import {
+  buildingDef,
   createSim,
+  hasComponent,
   isAlive,
   step,
   TICK_RATE,
@@ -27,9 +29,9 @@ function post(msg: WorkerToHost, transfer?: Transferable[]): void {
   (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
 }
 
-/** Pack live unit state for the renderer: [tick, count, (eid,x,y,player,kind,flags,hp,max)*]. */
+/** Pack live entity state: [tick, count, (eid,x,y,player,kind,flags,hp,max,progressPct)*]. */
 function renderSnapshot(s: SimWorld): ArrayBuffer {
-  const { Position, Owner, Kind, MoveTarget, Health } = s.c;
+  const { Position, Owner, Kind, MoveTarget, Health, Building } = s.c;
   const eids: number[] = [];
   for (let eid = 1; eid <= s.allocated; eid++) {
     if (isAlive(s, eid)) eids.push(eid);
@@ -39,14 +41,21 @@ function renderSnapshot(s: SimWorld): ArrayBuffer {
   out[1] = eids.length;
   let o = SNAPSHOT_HEADER;
   for (const eid of eids) {
+    const isBuilding = hasComponent(s.world, eid, Building);
     out[o++] = eid;
     out[o++] = Position.x[eid]!;
     out[o++] = Position.y[eid]!;
     out[o++] = Owner.player[eid]!;
-    out[o++] = Kind.id[eid]!;
-    out[o++] = MoveTarget.active[eid] === 1 ? 1 : 0; // FLAG_MOVING
+    out[o++] = isBuilding ? Building.kindId[eid]! : Kind.id[eid]!;
+    out[o++] =
+      (!isBuilding && MoveTarget.active[eid] === 1 ? 1 : 0) | (isBuilding ? 2 : 0);
     out[o++] = Health.hp[eid]!;
     out[o++] = Health.max[eid]!;
+    out[o++] = isBuilding
+      ? Building.complete[eid] === 1
+        ? 100
+        : Math.min(99, Math.floor((Building.progress[eid]! * 100) / buildingDef(Building.kindId[eid]!).buildTime))
+      : 100;
   }
   return out.buffer;
 }
@@ -64,11 +73,17 @@ function tickOnce(): void {
   step(sim, commands);
   if (commands.length > 0) post({ type: 'stamped', commands });
   const buffer = renderSnapshot(sim);
+  const resources = {
+    cash: sim.cash[0]!,
+    vibe: sim.vibe[0]!,
+    heat: sim.heat[0]!,
+    policy: sim.policy[0]!,
+  };
   if (sim.tick % FOG_SEND_INTERVAL === 0) {
     const fog = sim.fog[0]!.slice().buffer;
-    post({ type: 'snapshot', tick: sim.tick, buffer, fog }, [buffer, fog]);
+    post({ type: 'snapshot', tick: sim.tick, buffer, fog, ...resources }, [buffer, fog]);
   } else {
-    post({ type: 'snapshot', tick: sim.tick, buffer }, [buffer]);
+    post({ type: 'snapshot', tick: sim.tick, buffer, ...resources }, [buffer]);
   }
 }
 

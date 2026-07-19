@@ -6,8 +6,9 @@ import {
   removeComponent,
   type World,
 } from 'bitecs';
+import { BUILDINGS_BY_ID, UNITS, UNITS_BY_ID, type BuildingDef, type UnitDef } from '@wotc/data';
 import { FP, idiv } from './fp.ts';
-import type { WalkGrid } from './map/grid.ts';
+import { blockRect, type WalkGrid } from './map/grid.ts';
 import { buildMap, type MapId } from './map/maps.ts';
 import { FlowFieldCache } from './path/flowfield.ts';
 import { createPrng, type Prng } from './prng.ts';
@@ -19,6 +20,12 @@ import { createPrng, type Prng } from './prng.ts';
 // snapshot/restore exact using only public bitecs API, at the cost of a hard
 // cap on total entities ever created in one match. 32k is plenty for v1.
 export const CAPACITY = 32768;
+
+/** Production queue slots per building. */
+export const QUEUE_SLOTS = 5;
+
+/** Number of players (fog grids, resources). */
+export const MAX_PLAYERS = 2;
 
 // ── Components ──────────────────────────────────────────────────────────────
 // bitecs 0.4 components are plain objects with user-owned storage. Each sim
@@ -34,7 +41,7 @@ export function createComponents() {
     Position: { x: i32(), y: i32() },
     Velocity: { x: i32(), y: i32() },
     Owner: { player: ui8() },
-    Kind: { id: ui16() },
+    Kind: { id: ui16(), speed: i32() },
     MoveTarget: {
       x: i32(),
       y: i32(),
@@ -57,7 +64,29 @@ export function createComponents() {
       /** Acquisition radius, sub-units. */
       acquire: i32(),
     },
-    /** Debug/demo behavior: wander randomly when idle (M1/M2 scaffolding). */
+    Building: {
+      kindId: ui16(),
+      /** Footprint origin cell + size (needed to unblock on death). */
+      cellX: ui16(),
+      cellY: ui16(),
+      w: ui8(),
+      h: ui8(),
+      /** Construction progress in ticks; complete when >= def.buildTime. */
+      progress: i32(),
+      complete: ui8(),
+      rallyX: i32(),
+      rallyY: i32(),
+      /** Production: unit id in progress (-1 = idle) + remaining ticks. */
+      prodKind: i32(),
+      prodLeft: i32(),
+      qLen: ui8(),
+      q0: ui16(),
+      q1: ui16(),
+      q2: ui16(),
+      q3: ui16(),
+      q4: ui16(),
+    },
+    /** Idle-wander behavior (crowd units — Clubgoers dancing about). */
     Walker: { cooldown: i32() },
   };
 }
@@ -78,6 +107,7 @@ export const COMPONENT_NAMES = [
   'MoveTarget',
   'Health',
   'Combat',
+  'Building',
   'Walker',
 ] as const satisfies readonly ComponentName[];
 
@@ -109,13 +139,25 @@ export interface SimWorld {
   /** Total entities ever allocated (monotonic — never decreases). */
   allocated: number;
   mapId: MapId;
-  /** Static walkability — derived from mapId, not checksummed/snapshotted. */
+  /**
+   * Walkability: base map from mapId + building footprints. Mutated ONLY by
+   * placeFootprint/clearFootprint, which also invalidate the flow cache.
+   * Reconstructable (map + alive buildings), so not snapshotted directly.
+   */
   grid: WalkGrid;
   /**
    * Fog of war, one grid per player: 0 unexplored, 1 explored, 2 visible.
    * Accumulates over time, so it IS state (checksummed + snapshotted).
    */
   fog: Uint8Array[];
+  /** Per-player resources & state (checksummed + snapshotted). */
+  cash: Int32Array;
+  vibe: Int32Array;
+  heat: Int32Array;
+  /** Door policy per player: 0 open, 1 selective, 2 locked. */
+  policy: Uint8Array;
+  /** Raids already triggered against player 0. */
+  raidsSpawned: number;
   /** Derived cache — deterministic function of (grid, target), never state. */
   flowCache: FlowFieldCache;
   /** Map size in fixed-point sub-units. */
@@ -130,6 +172,8 @@ export interface SimOptions {
 export function createSim(seed: number, opts: SimOptions = {}): SimWorld {
   const mapId = opts.mapId ?? 'empty256';
   const grid = buildMap(mapId);
+  const policy = new Uint8Array(MAX_PLAYERS);
+  policy.fill(1); // selective
   return {
     world: createWorld(),
     c: createComponents(),
@@ -139,6 +183,11 @@ export function createSim(seed: number, opts: SimOptions = {}): SimWorld {
     mapId,
     grid,
     fog: Array.from({ length: MAX_PLAYERS }, () => new Uint8Array(grid.w * grid.h)),
+    cash: new Int32Array(MAX_PLAYERS),
+    vibe: new Int32Array(MAX_PLAYERS),
+    heat: new Int32Array(MAX_PLAYERS),
+    policy,
+    raidsSpawned: 0,
     flowCache: new FlowFieldCache(grid),
     mapW: grid.w * FP,
     mapH: grid.h * FP,
@@ -164,8 +213,13 @@ export function spawnEntity(sim: SimWorld): number {
   return eid;
 }
 
-/** "Kill" an entity: strip all components. The id is retired forever. */
+/** "Kill" an entity: strip all components. The id is retired forever.
+ * Buildings also release their footprint. */
 export function killEntity(sim: SimWorld, eid: number): void {
+  const { Building } = sim.c;
+  if (hasComponent(sim.world, eid, Building)) {
+    clearFootprint(sim, Building.cellX[eid]!, Building.cellY[eid]!, Building.w[eid]!, Building.h[eid]!);
+  }
   for (const name of COMPONENT_NAMES) {
     const comp = sim.c[name];
     if (hasComponent(sim.world, eid, comp)) removeComponent(sim.world, eid, comp);
@@ -186,31 +240,28 @@ export function sortedAsc(ents: ArrayLike<number>): number[] {
   return Array.from(ents).sort((a, b) => a - b);
 }
 
-/** Number of players (fog grids etc.). */
-export const MAX_PLAYERS = 2;
+// ── Data lookups ────────────────────────────────────────────────────────────
 
-/** Unit kinds (placeholder until @wotc/data unit defs land in M7). */
-export const KIND_WALKER = 0; // wanders when idle (demo/bench crowds), unarmed
-export const KIND_UNIT = 1; // melee fighter (Bouncer placeholder)
-export const KIND_RANGED = 2; // ranged fighter (Strobe Acolyte placeholder)
+/** Compat aliases for early milestones' demo kinds. */
+export const KIND_WALKER = UNITS.clubgoer.id;
+export const KIND_UNIT = UNITS.bouncer.id;
+export const KIND_RANGED = UNITS.strobe_acolyte.id;
 
-interface KindStats {
-  hp: number;
-  damage: number;
-  range: number;
-  cooldown: number;
-  acquire: number;
-  vision: number; // cells
+export function unitDef(kind: number): UnitDef {
+  const def = UNITS_BY_ID.get(kind);
+  if (!def) throw new Error(`unknown unit kind ${kind}`);
+  return def;
 }
 
-/** Placeholder combat stats per kind — replaced by @wotc/data in M7. */
-export const KIND_STATS: Record<number, KindStats> = {
-  [KIND_WALKER]: { hp: 40, damage: 0, range: 0, cooldown: 0, acquire: 0, vision: 6 },
-  [KIND_UNIT]: { hp: 120, damage: 10, range: idiv(FP * 5, 4), cooldown: 16, acquire: FP * 6, vision: 8 },
-  [KIND_RANGED]: { hp: 70, damage: 14, range: FP * 5, cooldown: 24, acquire: FP * 7, vision: 9 },
-};
+export function buildingDef(kind: number): BuildingDef {
+  const def = BUILDINGS_BY_ID.get(kind);
+  if (!def) throw new Error(`unknown building kind ${kind}`);
+  return def;
+}
 
-/** Spawn a unit. Kind 0 gets the idle-wander Walker behavior. */
+// ── Spawning ────────────────────────────────────────────────────────────────
+
+/** Spawn a unit with stats from @wotc/data. Wanderers get Walker behavior. */
 export function spawnUnit(
   sim: SimWorld,
   player: number,
@@ -218,6 +269,7 @@ export function spawnUnit(
   x: number,
   y: number,
 ): number {
+  const def = unitDef(kind);
   const eid = spawnEntity(sim);
   const { Position, Velocity, Owner, Kind, MoveTarget, Health, Combat, Walker } = sim.c;
   addComponent(sim.world, eid, Position);
@@ -232,24 +284,103 @@ export function spawnUnit(
   Velocity.y[eid] = 0;
   Owner.player[eid] = player % MAX_PLAYERS;
   Kind.id[eid] = kind;
+  Kind.speed[eid] = def.speed;
   MoveTarget.active[eid] = 0;
   MoveTarget.amove[eid] = 0;
-  const stats = KIND_STATS[kind] ?? KIND_STATS[KIND_WALKER]!;
-  Health.hp[eid] = stats.hp;
-  Health.max[eid] = stats.hp;
-  if (stats.damage > 0) {
+  Health.hp[eid] = def.hp;
+  Health.max[eid] = def.hp;
+  if (def.damage > 0) {
     addComponent(sim.world, eid, Combat);
-    Combat.damage[eid] = stats.damage;
-    Combat.range[eid] = stats.range;
-    Combat.cooldown[eid] = stats.cooldown;
+    Combat.damage[eid] = def.damage;
+    Combat.range[eid] = def.range;
+    Combat.cooldown[eid] = def.attackCooldown;
     Combat.cdLeft[eid] = 0;
-    Combat.acquire[eid] = stats.acquire;
+    Combat.acquire[eid] = def.acquire;
   }
-  if (kind === KIND_WALKER) {
+  if (def.wanders) {
     addComponent(sim.world, eid, Walker);
     Walker.cooldown[eid] = 0;
   }
   return eid;
+}
+
+function stampFootprint(sim: SimWorld, cellX: number, cellY: number, w: number, h: number): void {
+  blockRect(sim.grid, cellX, cellY, w, h);
+  sim.flowCache.clear();
+}
+
+function clearFootprint(sim: SimWorld, cellX: number, cellY: number, w: number, h: number): void {
+  // Buildings only ever occupy previously-walkable cells, so clearing the
+  // rect restores the base map exactly.
+  for (let y = cellY; y < cellY + h; y++) {
+    for (let x = cellX; x < cellX + w; x++) {
+      sim.grid.cells[x + y * sim.grid.w] = 0;
+    }
+  }
+  sim.flowCache.clear();
+}
+
+/** Can a building footprint go here? (all cells walkable & in bounds) */
+export function canPlaceBuilding(sim: SimWorld, kind: number, cellX: number, cellY: number): boolean {
+  const def = buildingDef(kind);
+  if (cellX < 0 || cellY < 0 || cellX + def.w > sim.grid.w || cellY + def.h > sim.grid.h) {
+    return false;
+  }
+  for (let y = cellY; y < cellY + def.h; y++) {
+    for (let x = cellX; x < cellX + def.w; x++) {
+      if (sim.grid.cells[x + y * sim.grid.w] !== 0) return false;
+    }
+  }
+  return true;
+}
+
+/** Spawn a building at a footprint origin cell. */
+export function spawnBuilding(
+  sim: SimWorld,
+  player: number,
+  kind: number,
+  cellX: number,
+  cellY: number,
+  complete: boolean,
+): number {
+  const def = buildingDef(kind);
+  const eid = spawnEntity(sim);
+  const { Position, Owner, Health, Building } = sim.c;
+  addComponent(sim.world, eid, Position);
+  addComponent(sim.world, eid, Owner);
+  addComponent(sim.world, eid, Health);
+  addComponent(sim.world, eid, Building);
+  // Center of the footprint, in sub-units.
+  Position.x[eid] = cellX * FP + idiv(def.w * FP, 2);
+  Position.y[eid] = cellY * FP + idiv(def.h * FP, 2);
+  Owner.player[eid] = player % MAX_PLAYERS;
+  Health.hp[eid] = def.hp;
+  Health.max[eid] = def.hp;
+  Building.kindId[eid] = kind;
+  Building.cellX[eid] = cellX;
+  Building.cellY[eid] = cellY;
+  Building.w[eid] = def.w;
+  Building.h[eid] = def.h;
+  Building.progress[eid] = complete ? def.buildTime : 0;
+  Building.complete[eid] = complete ? 1 : 0;
+  // Default rally: one cell below the footprint.
+  Building.rallyX[eid] = Position.x[eid]!;
+  Building.rallyY[eid] = (cellY + def.h + 1) * FP;
+  Building.prodKind[eid] = -1;
+  Building.prodLeft[eid] = 0;
+  Building.qLen[eid] = 0;
+  stampFootprint(sim, cellX, cellY, def.w, def.h);
+  return eid;
+}
+
+/** Restamp all alive building footprints (snapshot restore). */
+export function restampFootprints(sim: SimWorld): void {
+  const { Building } = sim.c;
+  for (let eid = 1; eid <= sim.allocated; eid++) {
+    if (!isAlive(sim, eid) || !hasComponent(sim.world, eid, Building)) continue;
+    blockRect(sim.grid, Building.cellX[eid]!, Building.cellY[eid]!, Building.w[eid]!, Building.h[eid]!);
+  }
+  sim.flowCache.clear();
 }
 
 export { hasComponent };

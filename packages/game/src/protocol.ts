@@ -11,7 +11,13 @@ import type { Command, MapId } from '@wotc/sim';
 export type CommandInput =
   | { playerId: number; type: 'spawn'; kind: number; x: number; y: number }
   | { playerId: number; type: 'move'; unitIds: number[]; x: number; y: number; mode?: 'a' }
-  | { playerId: number; type: 'stop'; unitIds: number[] };
+  | { playerId: number; type: 'stop'; unitIds: number[] }
+  | { playerId: number; type: 'build'; builderId: number; kind: number; cellX: number; cellY: number }
+  | { playerId: number; type: 'spawnBuilding'; kind: number; cellX: number; cellY: number }
+  | { playerId: number; type: 'train'; buildingId: number; kind: number }
+  | { playerId: number; type: 'rally'; buildingId: number; x: number; y: number }
+  | { playerId: number; type: 'policy'; value: number }
+  | { playerId: number; type: 'grant'; cash: number; vibe: number };
 
 export type HostToWorker =
   | { type: 'init'; seed: number; mapId: MapId }
@@ -23,16 +29,23 @@ export type WorkerToHost =
   | {
       type: 'snapshot';
       tick: number;
-      /** Ints: [tick, count, then per unit: eid, x, y, player, kind, flags, hp, maxHp]. */
+      /** Ints: [tick, count, then per entity:
+       *  eid, x, y, player, kind, flags, hp, maxHp, progressPct]. */
       buffer: ArrayBuffer;
       /** Player-0 fog grid (0 unexplored / 1 explored / 2 visible), sent periodically. */
       fog?: ArrayBuffer;
+      /** Player-0 resources. */
+      cash: number;
+      vibe: number;
+      heat: number;
+      policy: number;
     }
   | { type: 'stamped'; commands: Command[] };
 
-/** Ints per unit in the render snapshot buffer. */
-export const SNAPSHOT_STRIDE = 8;
+/** Ints per entity in the render snapshot buffer. */
+export const SNAPSHOT_STRIDE = 9;
 export const SNAPSHOT_HEADER = 2;
 
 /** Snapshot flag bits. */
 export const FLAG_MOVING = 1;
+export const FLAG_BUILDING = 2;

@@ -1,4 +1,6 @@
-import { buildMap, FP, KIND_UNIT } from '@wotc/sim';
+import { buildMap, FP } from '@wotc/sim';
+import { BUILDINGS, DOOR_POLICIES, UNITS } from '@wotc/data';
+import type { CommandInput } from './protocol.ts';
 import { Controls } from './input/controls.ts';
 import { createGameEngine } from './render/engine.ts';
 import { createGameScene } from './render/scene.ts';
@@ -6,7 +8,6 @@ import { SimHost, type UnitView } from './simHost.ts';
 
 const MAP_ID = 'skirmish01';
 const MAP_CELLS = 256;
-const DEMO_UNITS = 50;
 
 function badge(): HTMLDivElement {
   const el = document.createElement('div');
@@ -18,38 +19,51 @@ function badge(): HTMLDivElement {
   return el;
 }
 
+/** The Powerplant forecourt scenario: your club on the south floor,
+ * the Legion warcamp beyond the wall. */
+function scenario(): CommandInput[] {
+  const inputs: CommandInput[] = [];
+  const p0 = (i: CommandInput) => inputs.push(i);
+  // Starting resources.
+  p0({ playerId: 0, type: 'grant', cash: 400, vibe: 0 });
+  // The club.
+  p0({ playerId: 0, type: 'spawnBuilding', kind: BUILDINGS.the_door.id, cellX: 116, cellY: 196 });
+  p0({ playerId: 0, type: 'spawnBuilding', kind: BUILDINGS.dancefloor.id, cellX: 104, cellY: 188 });
+  p0({ playerId: 0, type: 'spawnBuilding', kind: BUILDINGS.bar.id, cellX: 128, cellY: 190 });
+  // Staff and crowd.
+  for (let i = 0; i < 6; i++) {
+    p0({ playerId: 0, type: 'spawn', kind: UNITS.clubgoer.id, x: (105 + (i % 3) * 2) * FP, y: (186 - Math.floor(i / 3) * 2) * FP });
+  }
+  for (let i = 0; i < 2; i++) {
+    p0({ playerId: 0, type: 'spawn', kind: UNITS.cable_guy.id, x: (122 + i * 2) * FP, y: 194 * FP });
+  }
+  for (let i = 0; i < 4; i++) {
+    p0({ playerId: 0, type: 'spawn', kind: UNITS.bouncer.id, x: (114 + i * 3) * FP, y: 180 * FP });
+  }
+  // The Legion, beyond the wall.
+  p0({ playerId: 1, type: 'spawnBuilding', kind: BUILDINGS.warcamp.id, cellX: 118, cellY: 30 });
+  for (let i = 0; i < 6; i++) {
+    p0({ playerId: 1, type: 'spawn', kind: UNITS.gabber.id, x: (112 + (i % 3) * 4) * FP, y: (40 + Math.floor(i / 3) * 3) * FP });
+  }
+  return inputs;
+}
+
 async function boot(): Promise<void> {
   const canvas = document.getElementById('render-canvas') as HTMLCanvasElement;
   const { engine, backend } = await createGameEngine(canvas);
-  const game = createGameScene(engine, MAP_CELLS, buildMap(MAP_ID));
+  const grid = buildMap(MAP_ID);
+  const game = createGameScene(engine, MAP_CELLS, grid);
   const hud = badge();
 
   const host = new SimHost();
-  host.onReady = () => {
-    // A squad of obedient units for the player…
-    // South floor (below the wall at y≈128) — the squad must path the door.
-    const inputs = Array.from({ length: DEMO_UNITS }, (_, i) => ({
-      playerId: 0,
-      type: 'spawn' as const,
-      kind: KIND_UNIT,
-      x: (100 + (i % 10) * 4) * FP,
-      y: (170 + Math.floor(i / 10) * 4) * FP,
-    }));
-    // …and a rival crowd milling about beyond the wall (not selectable).
-    for (let i = 0; i < 30; i++) {
-      inputs.push({
-        playerId: 1,
-        type: 'spawn' as const,
-        kind: 0,
-        x: (110 + (i % 6) * 5) * FP,
-        y: (60 + Math.floor(i / 6) * 5) * FP,
-      });
-    }
-    host.issue(...inputs);
-  };
+  host.onReady = () => host.issue(...scenario());
   host.start(1337, MAP_ID);
 
-  const controls = new Controls(game, host);
+  // Start the camera over the club, not the map center.
+  game.camera.position.x = 120;
+  game.camera.position.z = 160;
+
+  const controls = new Controls(game, host, grid);
   const views: UnitView[] = [];
   let lastFog: Uint8Array | null = null;
   engine.runRenderLoop(() => {
@@ -63,12 +77,13 @@ async function boot(): Promise<void> {
     game.updateUnits(views, now / 1000, host.fog);
     game.updateSelection(views, controls.selected);
     game.scene.render();
+    const build = controls.buildModeName();
     hud.textContent =
-      `World of TechnoCraft — ${backend}\n` +
-      `fps ${engine.getFps().toFixed(0)}  tick ${host.tick}  units ${views.length}\n` +
-      `selected ${controls.selected.size}${controls.attackMovePending ? '  [A-MOVE]' : ''}\n` +
-      `LMB select/drag · RMB move · shift-RMB queue · A+RMB attack-move\n` +
-      `ctrl+0-9 group · 0-9 recall · dblclick select-type · H stop · Esc clear`;
+      `World of TechnoCraft — ${backend}  fps ${engine.getFps().toFixed(0)}  tick ${host.tick}\n` +
+      `cash €${host.cash}  vibe ${host.vibe}  heat ${host.heat}  door: ${DOOR_POLICIES[host.policy]?.name ?? '?'}\n` +
+      `selected ${controls.selected.size}${controls.attackMovePending ? '  [A-MOVE]' : ''}${build ? `  [BUILD: ${build}]` : ''}\n` +
+      `LMB select · RMB move/rally · shift queue · A attack-move · B build (cycle) · P door policy\n` +
+      `bldg keys: T/Y/U/I train · ctrl+0-9 group · dblclick type · H stop · Esc cancel`;
   });
 
   window.addEventListener('resize', () => engine.resize());

@@ -17,6 +17,7 @@ import '@babylonjs/core/Meshes/thinInstanceMesh';
 import '@babylonjs/core/Culling/ray';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { isWalkable, type WalkGrid } from '@wotc/sim';
+import { BUILDINGS_BY_ID } from '@wotc/data';
 import type { UnitView } from '../simHost.ts';
 
 const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
@@ -124,6 +125,16 @@ export function createGameScene(
   let colors = new Float32Array(0);
   const tmp = Matrix.Identity();
 
+  // Buildings: a second box batch, footprint-scaled, dimmed while building.
+  const buildingMesh = MeshBuilder.CreateBox('building', { size: 1 }, scene);
+  const buildingMat = new StandardMaterial('buildingMat', scene);
+  buildingMat.specularColor = Color3.Black();
+  buildingMat.emissiveColor = new Color3(0.12, 0.12, 0.16);
+  buildingMesh.material = buildingMat;
+  buildingMesh.thinInstanceRegisterAttribute('color', 4);
+  let bldMatrices = new Float32Array(0);
+  let bldColors = new Float32Array(0);
+
   // Health bars: one flat batch above damaged units.
   const barMesh = MeshBuilder.CreateBox('hpbar', { width: 0.9, height: 0.07, depth: 0.12 }, scene);
   const barMat = new StandardMaterial('hpbarMat', scene);
@@ -143,31 +154,56 @@ export function createGameScene(
       barMatrices = new Float32Array(capacity * 16);
       barColors = new Float32Array(capacity * 4);
     }
+    if (units.length * 16 > bldMatrices.length) {
+      bldMatrices = new Float32Array(units.length * 32);
+      bldColors = new Float32Array(units.length * 8);
+    }
     const beat = timeSec * BEAT_HZ * Math.PI;
     let n = 0;
     let bars = 0;
+    let blds = 0;
     for (const u of units) {
       // Enemies in unseen cells don't get drawn (fog is sim-authoritative).
+      // (Explored-but-dark enemy BUILDINGS stay visible — classic RTS rule.)
       if (fog && u.player !== 0) {
         const ci = Math.floor(u.x) + Math.floor(u.y) * mapCells;
-        if (fog[ci] !== 2) continue;
+        const seen = u.building ? fog[ci] !== 0 : fog[ci] === 2;
+        if (!seen) continue;
       }
-      // Everybody dances: a per-unit phase-offset bounce on the beat.
-      const bounce = Math.abs(Math.sin(beat + u.eid * 0.7));
-      const squash = 1 + bounce * 0.25;
-      Matrix.ScalingToRef(1, squash, 1, tmp);
-      tmp.setTranslationFromFloats(u.x, 0.55 * squash + bounce * 0.15, u.y);
-      tmp.copyToArray(matrices, n * 16);
-      const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
-      colors[n * 4] = r;
-      colors[n * 4 + 1] = g;
-      colors[n * 4 + 2] = b;
-      colors[n * 4 + 3] = 1;
-      n++;
+      if (u.building) {
+        const def = BUILDINGS_BY_ID.get(u.kind);
+        const w = def?.w ?? 2;
+        const h = def?.h ?? 2;
+        const height = u.progress < 100 ? 0.6 + (2.4 * u.progress) / 100 : 3;
+        Matrix.ScalingToRef(w * 0.92, height, h * 0.92, tmp);
+        tmp.setTranslationFromFloats(u.x, height / 2, u.y);
+        tmp.copyToArray(bldMatrices, blds * 16);
+        const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
+        const dim = u.progress < 100 ? 0.35 : 0.85;
+        bldColors[blds * 4] = r * dim;
+        bldColors[blds * 4 + 1] = g * dim;
+        bldColors[blds * 4 + 2] = b * dim;
+        bldColors[blds * 4 + 3] = 1;
+        blds++;
+      } else {
+        // Everybody dances: a per-unit phase-offset bounce on the beat.
+        const bounce = Math.abs(Math.sin(beat + u.eid * 0.7));
+        const squash = 1 + bounce * 0.25;
+        Matrix.ScalingToRef(1, squash, 1, tmp);
+        tmp.setTranslationFromFloats(u.x, 0.55 * squash + bounce * 0.15, u.y);
+        tmp.copyToArray(matrices, n * 16);
+        const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
+        colors[n * 4] = r;
+        colors[n * 4 + 1] = g;
+        colors[n * 4 + 2] = b;
+        colors[n * 4 + 3] = 1;
+        n++;
+      }
       if (u.maxHp > 0 && u.hp < u.maxHp) {
         const frac = Math.max(0, u.hp / u.maxHp);
-        Matrix.ScalingToRef(frac, 1, 1, tmp);
-        tmp.setTranslationFromFloats(u.x - 0.45 * (1 - frac), 1.7, u.y);
+        const barY = u.building ? 3.4 : 1.7;
+        Matrix.ScalingToRef(frac * (u.building ? 2 : 1), 1, 1, tmp);
+        tmp.setTranslationFromFloats(u.x - 0.45 * (1 - frac), barY, u.y);
         tmp.copyToArray(barMatrices, bars * 16);
         barColors[bars * 4] = 1 - frac;
         barColors[bars * 4 + 1] = frac;
@@ -179,6 +215,14 @@ export function createGameScene(
     unitMesh.thinInstanceSetBuffer('matrix', matrices.subarray(0, n * 16), 16, false);
     unitMesh.thinInstanceSetBuffer('color', colors.subarray(0, n * 4), 4, false);
     unitMesh.thinInstanceCount = n;
+    if (blds > 0) {
+      buildingMesh.setEnabled(true);
+      buildingMesh.thinInstanceSetBuffer('matrix', bldMatrices.subarray(0, blds * 16), 16, false);
+      buildingMesh.thinInstanceSetBuffer('color', bldColors.subarray(0, blds * 4), 4, false);
+      buildingMesh.thinInstanceCount = blds;
+    } else {
+      buildingMesh.setEnabled(false);
+    }
     if (bars > 0) {
       barMesh.setEnabled(true);
       barMesh.thinInstanceSetBuffer('matrix', barMatrices.subarray(0, bars * 16), 16, false);

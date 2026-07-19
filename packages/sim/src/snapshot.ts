@@ -18,23 +18,26 @@ import {
   createSim,
   MAP_IDS,
   mapIndex,
+  MAX_PLAYERS,
+  restampFootprints,
   spawnEntity,
   type SimWorld,
 } from './world.ts';
 
 const MAGIC = 0x574f5443; // 'WOTC'
-export const SNAPSHOT_VERSION = 3;
+export const SNAPSHOT_VERSION = 4;
 
 export function serializeSim(sim: SimWorld): ArrayBuffer {
   const n = sim.allocated;
   let fieldCount = 0;
   for (const name of COMPONENT_NAMES) fieldCount += componentFields(sim.c[name]).length;
 
-  const headerBytes = 8 * 4;
+  const headerBytes = 9 * 4;
+  const playerBytes = MAX_PLAYERS * 4 * 4; // cash, vibe, heat, policy (as i32)
   const membershipBytes = COMPONENT_NAMES.length * n;
   const valueBytes = fieldCount * n * 4;
   const fogBytes = sim.fog.reduce((s, g) => s + g.length, 0);
-  const buf = new ArrayBuffer(headerBytes + membershipBytes + valueBytes + fogBytes);
+  const buf = new ArrayBuffer(headerBytes + playerBytes + membershipBytes + valueBytes + fogBytes);
   const view = new DataView(buf);
 
   let o = 0;
@@ -46,7 +49,15 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
   view.setUint32((o += 4), mapIndex(sim.mapId), true);
   view.setInt32((o += 4), sim.mapW, true);
   view.setInt32((o += 4), sim.mapH, true);
+  view.setInt32((o += 4), sim.raidsSpawned, true);
   o += 4;
+  for (let p = 0; p < MAX_PLAYERS; p++) {
+    view.setInt32(o, sim.cash[p]!, true);
+    view.setInt32(o + 4, sim.vibe[p]!, true);
+    view.setInt32(o + 8, sim.heat[p]!, true);
+    view.setInt32(o + 12, sim.policy[p]!, true);
+    o += 16;
+  }
 
   // Live ids are 1..n (bitecs reserves eid 0 as the null entity).
   for (const name of COMPONENT_NAMES) {
@@ -72,7 +83,7 @@ export function serializeSim(sim: SimWorld): ArrayBuffer {
 
 export function deserializeSim(buf: ArrayBuffer): SimWorld {
   const view = new DataView(buf);
-  if (buf.byteLength < 32 || view.getUint32(0, true) !== MAGIC) {
+  if (buf.byteLength < 36 || view.getUint32(0, true) !== MAGIC) {
     throw new Error('not a WOTC snapshot');
   }
   const version = view.getUint32(4, true);
@@ -85,16 +96,25 @@ export function deserializeSim(buf: ArrayBuffer): SimWorld {
   const mapIdx = view.getUint32(20, true);
   const mapW = view.getInt32(24, true);
   const mapH = view.getInt32(28, true);
+  const raidsSpawned = view.getInt32(32, true);
   if (n > CAPACITY) throw new Error('snapshot exceeds entity capacity');
   const mapId = MAP_IDS[mapIdx];
   if (!mapId) throw new Error(`snapshot references unknown map index ${mapIdx}`);
-  let o = 32;
+  let o = 36;
 
   const sim = createSim(0, { mapId });
   sim.tick = tick;
   sim.prng.s = prngState;
+  sim.raidsSpawned = raidsSpawned;
   if (sim.mapW !== mapW || sim.mapH !== mapH) {
     throw new Error('snapshot map size mismatch — map definition changed');
+  }
+  for (let p = 0; p < MAX_PLAYERS; p++) {
+    sim.cash[p] = view.getInt32(o, true);
+    sim.vibe[p] = view.getInt32(o + 4, true);
+    sim.heat[p] = view.getInt32(o + 8, true);
+    sim.policy[p] = view.getInt32(o + 12, true);
+    o += 16;
   }
 
   // Recreate the monotonic id space (ids 1..n), then re-add membership.
@@ -119,5 +139,7 @@ export function deserializeSim(buf: ArrayBuffer): SimWorld {
     fogGrid.set(new Uint8Array(buf, o, fogGrid.length));
     o += fogGrid.length;
   }
+  // Buildings restored above — re-block their footprints on the fresh grid.
+  restampFootprints(sim);
   return sim;
 }

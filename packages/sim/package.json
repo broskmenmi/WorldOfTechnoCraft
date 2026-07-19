@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@wotc/data": "workspace:*",
     "bitecs": "0.4.0"
   },
   "devDependencies": {
