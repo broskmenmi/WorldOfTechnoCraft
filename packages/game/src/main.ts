@@ -7,6 +7,8 @@ import { createGameScene } from './render/scene.ts';
 import { SimHost, type UnitView } from './simHost.ts';
 import { Minimap } from './ui/minimap.ts';
 import { BarkFeed } from './ui/barks.ts';
+import { isTouchDevice, TouchBar } from './ui/touchbar.ts';
+import { setupHelp } from './ui/help.ts';
 import { TechnoEngine } from './audio/techno.ts';
 import { Color4 } from '@babylonjs/core/Maths/math.color';
 
@@ -110,6 +112,9 @@ async function boot(): Promise<void> {
   const audio = new TechnoEngine();
   const controls = new Controls(game, host, grid, barks);
   const minimap = new Minimap(grid, game.camera);
+  const touch = isTouchDevice();
+  const touchBar = touch ? new TouchBar(controls, audio) : null;
+  setupHelp(touch);
   window.addEventListener('pointerdown', () => audio.start(), { once: true });
   window.addEventListener('keydown', (e) => {
     audio.start();
@@ -170,13 +175,17 @@ async function boot(): Promise<void> {
       showMatchEnd(host.matchState === 1, host.peakVibe, isReplay);
     }
 
+    touchBar?.update();
     const build = controls.buildModeName();
-    hud.textContent =
-      `World of TechnoCraft — ${backend}  fps ${engine.getFps().toFixed(0)}  tick ${host.tick}${isReplay ? '  [REPLAY]' : ''}\n` +
+    const status =
       `cash €${host.cash}  vibe ${host.vibe}  heat ${host.heat}  door: ${DOOR_POLICIES[host.policy]?.name ?? '?'}\n` +
       `☀ sunrise in ${fmtClock(host.sunriseTick - host.tick)}   wave ${host.wavesSpawned}  raids ${host.raidsSpawned}\n` +
-      `selected ${controls.selected.size}${controls.attackMovePending ? '  [A-MOVE]' : ''}${build ? `  [BUILD: ${build}]` : ''}\n` +
-      `LMB select · RMB move/rally · shift queue · A attack-move · B build · P door policy · M mute · F9 replay`;
+      `selected ${controls.selected.size}${controls.attackMovePending ? '  [A-MOVE]' : ''}${build ? `  [BUILD: ${build}]` : ''}`;
+    hud.textContent = touch
+      ? status
+      : `World of TechnoCraft — ${backend}  fps ${engine.getFps().toFixed(0)}  tick ${host.tick}${isReplay ? '  [REPLAY]' : ''}\n` +
+        status +
+        `\nLMB select · RMB move/rally · shift queue · A attack-move · B build · P door policy · M mute · F9 replay · ? help`;
   });
 
   window.addEventListener('resize', () => engine.resize());

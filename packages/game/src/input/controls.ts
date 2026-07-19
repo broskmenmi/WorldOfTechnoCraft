@@ -8,7 +8,7 @@
 // stays the complete record and replays reproduce the exact same movement.
 
 import { FP, isWalkable, type WalkGrid } from '@wotc/sim';
-import { BUILDINGS, BUILDINGS_BY_ID, UNITS } from '@wotc/data';
+import { BUILDINGS, BUILDINGS_BY_ID, UNITS, UNITS_BY_ID } from '@wotc/data';
 import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
@@ -56,6 +56,9 @@ export class Controls {
   private ghost: Mesh;
   private ghostMat: StandardMaterial;
   private lastPointer = { x: 0, y: 0 };
+  /** Active touch points for two-finger pan/pinch. */
+  private touches = new Map<number, { x: number; y: number }>();
+  private pinch: { dist: number; camY: number } | null = null;
 
   constructor(
     private game: GameScene,
@@ -131,6 +134,25 @@ export class Controls {
   }
 
   private onPointerDown(e: PointerEvent): void {
+    if (e.pointerType === 'touch') {
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touches.size === 2) {
+        // Second finger: cancel any select-drag, start pan/pinch.
+        this.dragStart = null;
+        this.dragRect.style.display = 'none';
+        const [a, b] = [...this.touches.values()];
+        this.pinch = { dist: Math.hypot(a!.x - b!.x, a!.y - b!.y), camY: this.game.camera.position.y };
+        return;
+      }
+      if (this.touches.size > 1) return;
+      if (this.buildMode >= 0) {
+        this.placeBuilding(e.clientX, e.clientY, false);
+        return;
+      }
+      // Single-finger: may become a drag-select or resolve as a tap on up.
+      this.dragStart = { x: e.clientX, y: e.clientY };
+      return;
+    }
     if (e.button === 0) {
       if (this.buildMode >= 0) {
         this.placeBuilding(e.clientX, e.clientY, e.shiftKey);
@@ -148,6 +170,14 @@ export class Controls {
 
   private onPointerMove(e: PointerEvent): void {
     this.lastPointer = { x: e.clientX, y: e.clientY };
+    if (e.pointerType === 'touch' && this.touches.has(e.pointerId)) {
+      const prev = this.touches.get(e.pointerId)!;
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touches.size >= 2 && this.pinch) {
+        this.panPinchCamera(prev, e);
+        return;
+      }
+    }
     if (this.buildMode >= 0) this.updateGhost();
     if (!this.dragStart) return;
     const x0 = Math.min(this.dragStart.x, e.clientX);
@@ -165,7 +195,46 @@ export class Controls {
     }
   }
 
+  /** Two-finger camera: pan by finger delta, zoom by pinch distance. */
+  private panPinchCamera(prevOfThisFinger: { x: number; y: number }, e: PointerEvent): void {
+    const cam = this.game.camera;
+    const scale = cam.position.y / 500; // screen px → world cells, feels right
+    cam.position.x = Math.min(256, Math.max(0, cam.position.x - (e.clientX - prevOfThisFinger.x) * scale));
+    cam.position.z = Math.min(256, Math.max(-20, cam.position.z + (e.clientY - prevOfThisFinger.y) * scale));
+    const [a, b] = [...this.touches.values()];
+    if (a && b && this.pinch) {
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (dist > 20) {
+        cam.position.y = Math.min(90, Math.max(14, (this.pinch.camY * this.pinch.dist) / dist));
+      }
+    }
+  }
+
   private onPointerUp(e: PointerEvent): void {
+    if (e.pointerType === 'touch') {
+      this.touches.delete(e.pointerId);
+      if (this.touches.size < 2) this.pinch = null;
+      if (this.touches.size > 0) return; // other finger still down
+      if (!this.dragStart) return;
+      const start = this.dragStart;
+      this.dragStart = null;
+      this.dragRect.style.display = 'none';
+      const dw = Math.abs(e.clientX - start.x);
+      const dh = Math.abs(e.clientY - start.y);
+      if (dw + dh > DRAG_THRESHOLD_PX * 2) {
+        this.boxSelect(start, e, false);
+        return;
+      }
+      // Tap: select a unit if one is under the finger; otherwise, with a
+      // selection active, the tap IS the order (touch has no right-click).
+      const hit = this.selectableAt(e.clientX, e.clientY);
+      if (hit) {
+        this.applySelection([hit.eid], false);
+      } else if (this.selected.size > 0) {
+        this.issueOrder(e.clientX, e.clientY, false);
+      }
+      return;
+    }
     if (e.button !== 0 || !this.dragStart) return;
     const start = this.dragStart;
     this.dragStart = null;
@@ -178,6 +247,10 @@ export class Controls {
       this.applySelection(hit ? [hit.eid] : [], e.shiftKey);
       return;
     }
+    this.boxSelect(start, e, e.shiftKey);
+  }
+
+  private boxSelect(start: { x: number; y: number }, e: PointerEvent, additive: boolean): void {
     const x0 = Math.min(start.x, e.clientX);
     const x1 = Math.max(start.x, e.clientX);
     const y0 = Math.min(start.y, e.clientY);
@@ -189,7 +262,7 @@ export class Controls {
       this.screenPos(u, tmp);
       if (tmp.x >= x0 && tmp.x <= x1 && tmp.y >= y0 && tmp.y <= y1) eids.push(u.eid);
     }
-    this.applySelection(eids, e.shiftKey);
+    this.applySelection(eids, additive);
   }
 
   private onDoubleClick(e: MouseEvent): void {
@@ -397,39 +470,64 @@ export class Controls {
       return;
     }
     if (e.code === 'KeyA') this.attackMovePending = true;
-    if (e.code === 'KeyB') {
-      this.buildMode = (this.buildMode + 1) % BUILDABLE.length;
-      this.updateGhost();
-    }
-    if (e.code === 'KeyP') {
-      this.host.issue({ playerId: PLAYER_ID, type: 'policy', value: (this.host.policy + 1) % 3 });
-    }
+    if (e.code === 'KeyB') this.cycleBuild();
+    if (e.code === 'KeyP') this.cyclePolicy();
     const trainSlot = TRAIN_KEYS[e.code];
-    if (trainSlot !== undefined) {
-      const building = this.views.find(
-        (v) => this.selected.has(v.eid) && v.building && v.player === PLAYER_ID,
-      );
-      if (building) {
-        const def = BUILDINGS_BY_ID.get(building.kind);
-        const kind = def?.trains[trainSlot];
-        if (kind !== undefined) {
-          this.host.issue({ playerId: PLAYER_ID, type: 'train', buildingId: building.eid, kind });
-          blipOrder();
-        }
-      }
-    }
-    if (e.code === 'Escape') {
-      this.attackMovePending = false;
-      if (this.buildMode >= 0) this.exitBuildMode();
-      else this.selected.clear();
-    }
-    if (e.code === 'KeyH') {
-      const unitIds = [...this.selected].filter((eid) => this.host.isAlive(eid));
-      if (unitIds.length > 0) {
-        for (const eid of unitIds) this.queues.delete(eid);
-        this.host.issue({ playerId: PLAYER_ID, type: 'stop', unitIds });
-        blipOrder();
-      }
-    }
+    if (trainSlot !== undefined) this.train(trainSlot);
+    if (e.code === 'Escape') this.cancel();
+    if (e.code === 'KeyH') this.stopSelected();
+  }
+
+  // ── Actions (shared by keyboard and the touch bar) ────────────────────────
+
+  toggleAttackMove(): void {
+    this.attackMovePending = !this.attackMovePending;
+  }
+
+  cycleBuild(): void {
+    this.buildMode = (this.buildMode + 1) % BUILDABLE.length;
+    this.updateGhost();
+  }
+
+  cyclePolicy(): void {
+    this.host.issue({ playerId: PLAYER_ID, type: 'policy', value: (this.host.policy + 1) % 3 });
+  }
+
+  /** Train the selected building's Nth unit type; true if a command was sent. */
+  train(slot: number): boolean {
+    const building = this.views.find(
+      (v) => this.selected.has(v.eid) && v.building && v.player === PLAYER_ID,
+    );
+    if (!building) return false;
+    const kind = BUILDINGS_BY_ID.get(building.kind)?.trains[slot];
+    if (kind === undefined) return false;
+    this.host.issue({ playerId: PLAYER_ID, type: 'train', buildingId: building.eid, kind });
+    blipOrder();
+    return true;
+  }
+
+  /** Names of what the selected building can train (touch bar labels). */
+  trainOptions(): string[] {
+    const building = this.views.find(
+      (v) => this.selected.has(v.eid) && v.building && v.player === PLAYER_ID,
+    );
+    if (!building) return [];
+    return (BUILDINGS_BY_ID.get(building.kind)?.trains ?? []).map(
+      (id) => UNITS_BY_ID.get(id)?.name ?? `#${id}`,
+    );
+  }
+
+  stopSelected(): void {
+    const unitIds = [...this.selected].filter((eid) => this.host.isAlive(eid));
+    if (unitIds.length === 0) return;
+    for (const eid of unitIds) this.queues.delete(eid);
+    this.host.issue({ playerId: PLAYER_ID, type: 'stop', unitIds });
+    blipOrder();
+  }
+
+  cancel(): void {
+    this.attackMovePending = false;
+    if (this.buildMode >= 0) this.exitBuildMode();
+    else this.selected.clear();
   }
 }
