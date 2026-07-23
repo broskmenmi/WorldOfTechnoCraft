@@ -111,5 +111,5 @@ export const EVENT_LINES = {
   lowCash: ['The bar is empty. The €9 water stands unsold. Grim.'],
   lowVibe: ['The floor is thinning. Someone said “one more hour” and left.'],
   buildingComplete: ['Construction complete. The cable run is load-bearing and emotional.'],
-  underAttack: ['The club is under attack. The smoking area has not noticed.'],
+  underAttack: ['A sound clash at the club. The smoking area has not noticed.'],
 } as const;

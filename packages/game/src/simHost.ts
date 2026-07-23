@@ -24,6 +24,8 @@ export interface UnitView {
   node: boolean;
   hero: boolean;
   carrying: boolean;
+  /** A harvester with nothing to do (for the idle-worker cycle key). */
+  idleWorker: boolean;
   hp: number;
   maxHp: number;
   /** Construction percent, or remaining-reserve percent for nodes. */
@@ -180,6 +182,7 @@ export class SimHost {
         node: (flags & 4) !== 0,
         hero: (flags & 8) !== 0,
         carrying: (flags & 16) !== 0,
+        idleWorker: (flags & 32) !== 0,
         hp: curr.data[o + 6]!,
         maxHp: curr.data[o + 7]!,
         progress: curr.data[o + 8]!,

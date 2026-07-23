@@ -61,16 +61,23 @@ export const sfx = {
     if (!ac || limited('zap', 90)) return;
     osc(ac, 'square', 1900, 300, ac.currentTime, 0.07, 0.05);
   },
+  /** Rage-quit: a record scratch and an indignant descending "ugh". */
   death(): void {
     const ac = audio();
     if (!ac || limited('death', 140)) return;
-    osc(ac, 'sawtooth', 300, 60, ac.currentTime, 0.22, 0.09);
+    const t = ac.currentTime;
+    noise(ac, t, 0.08, 0.07, 2400, 'bandpass');
+    osc(ac, 'sawtooth', 500, 140, t + 0.05, 0.16, 0.06);
   },
+  /** Shut down by the city council: rumble + a little sad trombone slide. */
   raze(): void {
     const ac = audio();
     if (!ac || limited('raze', 400)) return;
-    noise(ac, ac.currentTime, 0.7, 0.25, 220, 'lowpass');
-    osc(ac, 'sine', 120, 35, ac.currentTime, 0.7, 0.2);
+    const t = ac.currentTime;
+    noise(ac, t, 0.7, 0.22, 220, 'lowpass');
+    osc(ac, 'sine', 120, 35, t, 0.7, 0.18);
+    osc(ac, 'triangle', 220, 174, t + 0.15, 0.35, 0.08);
+    osc(ac, 'triangle', 174, 146, t + 0.5, 0.45, 0.08);
   },
   airhorn(): void {
     const ac = audio();

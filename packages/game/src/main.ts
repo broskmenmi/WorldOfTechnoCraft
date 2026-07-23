@@ -3,42 +3,71 @@ import { Controls } from './input/controls.ts';
 import { createGameEngine } from './render/engine.ts';
 import { createGameScene } from './render/scene.ts';
 import { UnitRenderer } from './render/units.ts';
+import { BuildingRenderer } from './render/buildings.ts';
 import { Effects, type DamageEvent } from './render/effects.ts';
 import { Dressing } from './render/dressing.ts';
 import { SimHost, type UnitView } from './simHost.ts';
 import { Minimap } from './ui/minimap.ts';
 import { BarkFeed } from './ui/barks.ts';
-import { SelectionPanel } from './ui/panel.ts';
-import { isTouchDevice, TouchBar } from './ui/touchbar.ts';
+import { CommandCard } from './ui/commandCard.ts';
+import { Objectives } from './ui/objectives.ts';
 import { setupHelp } from './ui/help.ts';
+import { ACCENT, CHROME_BG, CHROME_BORDER, DIM, FONT, GOLD, setOverlayOpen, TEXT } from './ui/theme.ts';
 import { TechnoEngine } from './audio/techno.ts';
 import { sfx } from './audio/sfx.ts';
 import { Color4 } from '@babylonjs/core/Maths/math.color';
+import { BUILDINGS_BY_ID, NODES_BY_ID, UNITS_BY_ID } from '@wotc/data';
 
 const MAP_ID: MapId = 'skirmish02';
 const MAP_CELLS = 256;
 const REPLAY_KEY = 'wotc-replay';
 
-function badge(): HTMLDivElement {
-  const el = document.createElement('div');
-  el.style.cssText =
-    'position:fixed;top:12px;left:12px;font:12px monospace;color:#7fff9f;' +
-    'background:#000a;padding:6px 10px;border-radius:4px;pointer-events:none;white-space:pre';
-  el.textContent = 'booting…';
-  document.getElementById('hud')?.appendChild(el);
-  return el;
+function isTouchDevice(): boolean {
+  return window.matchMedia('(pointer: coarse)').matches;
+}
+
+interface TopBar {
+  resources: HTMLSpanElement;
+  hero: HTMLSpanElement;
+  debug: HTMLSpanElement;
+  toggleDebug(): void;
+}
+
+/** Slim full-width top bar: the only chrome at the top of the screen. */
+function makeTopBar(): TopBar {
+  const bar = document.createElement('div');
+  bar.style.cssText =
+    `position:fixed;top:0;left:0;right:0;height:30px;display:flex;align-items:center;` +
+    `gap:18px;padding:0 52px 0 12px;background:${CHROME_BG};border-bottom:${CHROME_BORDER};` +
+    `font:${FONT};color:${TEXT};pointer-events:none;white-space:nowrap;overflow:hidden`;
+  const resources = document.createElement('span');
+  const hero = document.createElement('span');
+  hero.style.color = DIM;
+  const debug = document.createElement('span');
+  debug.style.cssText = `margin-left:auto;color:${DIM};display:none`;
+  bar.append(resources, hero, debug);
+  document.getElementById('hud')?.appendChild(bar);
+  return {
+    resources,
+    hero,
+    debug,
+    toggleDebug() {
+      debug.style.display = debug.style.display === 'none' ? 'inline' : 'none';
+    },
+  };
 }
 
 function showMatchEnd(won: boolean, isReplay: boolean): void {
+  setOverlayOpen(true);
   const el = document.createElement('div');
   el.style.cssText =
     'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
-    'flex-direction:column;background:#000a;pointer-events:auto;font-family:monospace;text-align:center';
+    'flex-direction:column;background:#000a;pointer-events:auto;font-family:monospace;text-align:center;z-index:20';
   el.innerHTML = won
-    ? `<div style="font-size:42px;color:#ffd75f">THE WARCAMP HAS FALLEN</div>
-       <div style="font-size:16px;color:#e8e8e8;margin:12px">Rotterdam is quiet. Somewhere, one last hug is exchanged.<br>Your club stands. The scene is yours.</div>`
-    : `<div style="font-size:42px;color:#ff5f5f">THE CLUB IS RUBBLE</div>
-       <div style="font-size:16px;color:#e8e8e8;margin:12px">The Legion renamed the ruins "Amsterdam?" and hugged everyone on the way out.</div>`;
+    ? `<div style="font-size:42px;color:${GOLD}">THE WARCAMP LOST THE AUX</div>
+       <div style="font-size:16px;color:#e8e8e8;margin:12px">The council shut down their last structure. The Legion shrugged,<br>hugged everyone within reach, and wandered off to find the afterparty.<br>The city dances to your sound now.</div>`
+    : `<div style="font-size:42px;color:#ff5f5f">THE COUNCIL SHUT YOU DOWN</div>
+       <div style="font-size:16px;color:#e8e8e8;margin:12px">Every permit revoked. The Legion renamed the venue "Amsterdam?"<br>and left a thank-you note. Nobody was hurt. Everyone is furious.</div>`;
   const hint = document.createElement('div');
   hint.style.cssText = 'font-size:12px;color:#888;margin-top:16px';
   hint.textContent = isReplay
@@ -67,16 +96,12 @@ function skyAt(tick: number): Color4 {
   return lerp(NIGHT, DAY, dawn);
 }
 
-function fmtCd(ticks: number): string {
-  return ticks > 0 ? ` ${Math.ceil(ticks / 20)}s` : '';
-}
-
 async function boot(): Promise<void> {
   const canvas = document.getElementById('render-canvas') as HTMLCanvasElement;
   const { engine, backend } = await createGameEngine(canvas);
   const grid = buildMap(MAP_ID);
   const game = createGameScene(engine, MAP_CELLS, grid);
-  const hud = badge();
+  const topBar = makeTopBar();
 
   const isReplay = new URLSearchParams(location.search).get('replay') === 'local';
   let replayCommands = null;
@@ -98,20 +123,33 @@ async function boot(): Promise<void> {
   const controls = new Controls(game, host, grid, barks);
   const minimap = new Minimap(grid, game.camera);
   const touch = isTouchDevice();
-  const touchBar = touch ? new TouchBar(controls, audio) : null;
   const unitRenderer = new UnitRenderer(game.scene);
+  const buildingRenderer = new BuildingRenderer(game.scene);
   const effects = new Effects(game.scene);
   const dressing = new Dressing(game.scene, grid, game.ground, MAP_CELLS);
-  const panel = new SelectionPanel(controls, host, touch);
+  const card = new CommandCard(controls, host, touch);
+  const objectives = new Objectives(isReplay);
   unitRenderer.onDeath = (v) => {
     if (v.building) sfx.raze();
     else sfx.death();
   };
   setupHelp(touch);
+
+  // Hover label (desktop): name + vibe for whatever is under the cursor.
+  const hoverEl = document.createElement('div');
+  hoverEl.style.cssText =
+    `position:fixed;display:none;background:${CHROME_BG};border:${CHROME_BORDER};` +
+    `border-radius:5px;padding:3px 8px;font:${FONT};color:${TEXT};pointer-events:none;z-index:5`;
+  document.getElementById('hud')?.appendChild(hoverEl);
+
   window.addEventListener('pointerdown', () => audio.start(), { once: true });
   window.addEventListener('keydown', (e) => {
     audio.start();
     if (e.code === 'KeyM') audio.toggleMute();
+    if (e.code === 'F3') {
+      e.preventDefault();
+      topBar.toggleDebug();
+    }
     if (e.code === 'F9') {
       e.preventDefault();
       const json = encodeReplay(host.buildReplay());
@@ -140,7 +178,7 @@ async function boot(): Promise<void> {
       game.updateFog(host.fog);
     }
 
-    // Fog-visible subset for the unit renderer (same rule the scene uses).
+    // Fog-visible subset for the renderers (same rule the scene uses).
     const fog = host.fog;
     const visible = fog
       ? views.filter((v) => {
@@ -150,7 +188,7 @@ async function boot(): Promise<void> {
         })
       : views;
 
-    // Damage events from hp diffs (visible entities only — fog stays honest).
+    // Clash events from vibe diffs (visible entities only — fog stays honest).
     const damage: DamageEvent[] = [];
     for (const v of visible) {
       const prev = prevHp.get(v.eid);
@@ -165,13 +203,36 @@ async function boot(): Promise<void> {
 
     game.updateUnits(views, now / 1000, host.fog);
     unitRenderer.update(visible, now, audio.beatPhase());
+    buildingRenderer.update(visible);
     effects.update(damage, visible, now);
     dressing.pulse(audio.beatPhase(), host.night);
     game.updateSelection(views, controls.selected);
     minimap.update(views, host.fog, now);
-    panel.update(views);
+    card.update(views);
+    if (objectives.update(visible, host, now)) sfx.levelUp();
     game.scene.clearColor = skyAt(host.tick);
     game.scene.render();
+
+    // Hover label (skip on touch — there's no hover).
+    if (!touch) {
+      const p = controls.pointer;
+      const hov = p.y > 36 ? controls.viewAt(p.x, p.y) : null;
+      if (hov) {
+        const def = hov.node
+          ? NODES_BY_ID.get(hov.kind)
+          : hov.building
+            ? BUILDINGS_BY_ID.get(hov.kind)
+            : UNITS_BY_ID.get(hov.kind);
+        hoverEl.textContent = hov.node
+          ? `${def?.name ?? '?'} — ${hov.progress}% left`
+          : `${def?.name ?? '?'} · vibe ${hov.hp}/${hov.maxHp}`;
+        hoverEl.style.display = 'block';
+        hoverEl.style.left = `${Math.min(p.x + 14, window.innerWidth - 180)}px`;
+        hoverEl.style.top = `${p.y + 16}px`;
+      } else {
+        hoverEl.style.display = 'none';
+      }
+    }
 
     // Hero moments: ability casts, THE DROP, level-ups.
     const hs = host.hero;
@@ -198,7 +259,7 @@ async function boot(): Promise<void> {
       lastRaids = host.raidsSpawned;
       barks.event('raidIncoming');
     }
-    // Music intensity: enemies near own buildings = danger.
+    // Music intensity: hostiles near own buildings = a clash is brewing.
     const ownBuildings = views.filter((v) => v.building && v.player === 0);
     const danger = views.some(
       (v) =>
@@ -216,24 +277,19 @@ async function boot(): Promise<void> {
       showMatchEnd(host.matchState === 1, isReplay);
     }
 
-    touchBar?.update();
+    // Top bar text.
+    const idle = controls.idleWorkerCount();
     const h = host.hero;
-    const heroLine =
+    topBar.resources.innerHTML =
+      `<b style="color:${GOLD}">€${host.cash}</b>  ⚙${host.gear}  ` +
+      `👥${host.headroomUsed}/${host.headroomCap}  tier ${host.tier}  ` +
+      `🔥${host.heat}  ${host.night ? '🌙' : '☀'}` +
+      (idle > 0 ? `  <span style="color:${ACCENT}">💤${idle} idle (,)</span>` : '');
+    topBar.hero.textContent =
       h.eid !== 0
-        ? `DJ lvl ${h.level}  xp ${h.xp}/${h.xpNext}  hype ${h.hype}/${h.hypeMax}` +
-          `  Q${fmtCd(h.cds[0])} W${fmtCd(h.cds[1])} E${fmtCd(h.cds[2])} R${fmtCd(h.cds[3])}`
-        : `DJ DOWN — press G to revive (€${h.reviveCost})`;
-    const build = controls.buildModeName();
-    const status =
-      `€${host.cash}  gear ${host.gear}  headroom ${host.headroomUsed}/${host.headroomCap}` +
-      `  tier ${host.tier}  heat ${host.heat}  ${host.night ? '🌙 night' : '☀ day'}\n` +
-      `${heroLine}\n` +
-      `selected ${controls.selected.size}${controls.attackMovePending ? '  [A-MOVE]' : ''}${build ? `  [BUILD: ${build}]` : ''}`;
-    hud.textContent = touch
-      ? status
-      : `World of TechnoCraft — ${backend}  fps ${engine.getFps().toFixed(0)}  tick ${host.tick}${isReplay ? '  [REPLAY]' : ''}\n` +
-        status +
-        `\nRMB move/harvest · A attack-move · B build · T/Y/U/I train · V tier up · Q/W/E/R hero · G revive · P door · M mute · ? help`;
+        ? `DJ lvl ${h.level} · hype ${h.hype}/${h.hypeMax}${isReplay ? ' · [REPLAY]' : ''}`
+        : `DJ went home — G to re-book (€${h.reviveCost})${isReplay ? ' · [REPLAY]' : ''}`;
+    topBar.debug.textContent = `${backend} · fps ${engine.getFps().toFixed(0)} · tick ${host.tick}`;
   });
 
   window.addEventListener('resize', () => engine.resize());

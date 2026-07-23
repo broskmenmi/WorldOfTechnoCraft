@@ -50,7 +50,9 @@ function renderSnapshot(s: SimWorld): ArrayBuffer {
     const isBuilding = hasComponent(s.world, eid, Building);
     const isNode = hasComponent(s.world, eid, ResourceNode);
     const isHero = hasComponent(s.world, eid, Hero);
-    const carrying = hasComponent(s.world, eid, Harvester) && Harvester.carry[eid]! > 0;
+    const isHarvester = hasComponent(s.world, eid, Harvester);
+    const carrying = isHarvester && Harvester.carry[eid]! > 0;
+    const idleWorker = isHarvester && Harvester.state[eid] === 0 && MoveTarget.active[eid] !== 1;
     let kind: number;
     let progress = 100;
     if (isBuilding) {
@@ -75,7 +77,8 @@ function renderSnapshot(s: SimWorld): ArrayBuffer {
       (isBuilding ? 2 : 0) |
       (isNode ? 4 : 0) |
       (isHero ? 8 : 0) |
-      (carrying ? 16 : 0);
+      (carrying ? 16 : 0) |
+      (idleWorker ? 32 : 0);
     out[o++] = Health.hp[eid]!;
     out[o++] = Health.max[eid]!;
     out[o++] = progress;

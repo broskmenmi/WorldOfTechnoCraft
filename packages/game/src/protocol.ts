@@ -82,3 +82,4 @@ export const FLAG_BUILDING = 2;
 export const FLAG_NODE = 4;
 export const FLAG_HERO = 8;
 export const FLAG_CARRYING = 16;
+export const FLAG_IDLE_WORKER = 32;

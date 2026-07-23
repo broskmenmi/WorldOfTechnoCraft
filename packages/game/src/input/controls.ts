@@ -103,6 +103,27 @@ export class Controls {
     return this.host.hero;
   }
 
+  /** Last known pointer position (for the hover label). */
+  get pointer(): { x: number; y: number } {
+    return this.lastPointer;
+  }
+
+  /** Any view (any owner, incl. buildings/nodes) near a screen point. */
+  viewAt(px: number, py: number): UnitView | null {
+    const tmp = new Vector3();
+    let best: UnitView | null = null;
+    let bestD = 22;
+    for (const u of this.views) {
+      this.screenPos(u, tmp);
+      const d = Math.hypot(tmp.x - px, tmp.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    return best;
+  }
+
   // ── Selection ─────────────────────────────────────────────────────────────
 
   private screenPos(u: UnitView, out: Vector3): Vector3 {
@@ -533,6 +554,56 @@ export class Controls {
     if (trainSlot !== undefined) this.train(trainSlot);
     if (e.code === 'Escape') this.cancel();
     if (e.code === 'KeyH') this.stopSelected();
+    if (e.code === 'KeyF') this.selectCrew();
+    if (e.code === 'Comma') this.cycleIdleWorker();
+    if (e.code === 'Space') {
+      e.preventDefault();
+      this.centerOnBase();
+    }
+  }
+
+  /** F: select every own combat unit (the whole crew, hero included). */
+  selectCrew(): void {
+    const eids = this.views
+      .filter(
+        (v) =>
+          v.player === PLAYER_ID &&
+          !v.building &&
+          !v.node &&
+          !(UNITS_BY_ID.get(v.kind)?.isHarvester ?? false),
+      )
+      .map((v) => v.eid);
+    this.applySelection(eids, false);
+  }
+
+  private lastIdleCycled = 0;
+
+  /** Comma: jump through idle workers, one per press. */
+  cycleIdleWorker(): void {
+    const idle = this.views.filter((v) => v.player === PLAYER_ID && v.idleWorker);
+    if (idle.length === 0) return;
+    const next = idle.find((v) => v.eid > this.lastIdleCycled) ?? idle[0]!;
+    this.lastIdleCycled = next.eid;
+    this.applySelection([next.eid], false);
+    this.game.camera.position.x = next.x;
+    this.game.camera.position.z = next.y - 28;
+  }
+
+  /** Space: snap the camera back to the HQ. */
+  centerOnBase(): void {
+    const hq = this.views.find(
+      (v) => v.player === PLAYER_ID && v.building && (BUILDINGS_BY_ID.get(v.kind)?.isDepot ?? false),
+    );
+    if (!hq) return;
+    this.game.camera.position.x = hq.x;
+    this.game.camera.position.z = hq.y - 28;
+  }
+
+  /** Count of currently idle own workers (for the HUD chip). */
+  idleWorkerCount(): number {
+    let n = 0;
+    for (const v of this.views) if (v.player === PLAYER_ID && v.idleWorker) n++;
+    return n;
   }
 
   // ── Hero ──────────────────────────────────────────────────────────────────
@@ -613,6 +684,19 @@ export class Controls {
     this.updateGhost();
   }
 
+  /** Arm placement for a specific buildable (command-card path). */
+  setBuildMode(index: number): void {
+    if (index < 0 || index >= BUILDABLE.length) return;
+    this.buildMode = this.buildMode === index ? -1 : index;
+    if (this.buildMode < 0) this.ghost.setEnabled(false);
+    else this.updateGhost();
+  }
+
+  /** The buildable roster (for the command card's build menu). */
+  buildOptions(): typeof BUILDABLE {
+    return BUILDABLE;
+  }
+
   cyclePolicy(): void {
     this.host.issue({ playerId: PLAYER_ID, type: 'policy', value: (this.host.policy + 1) % 3 });
   }
@@ -651,6 +735,7 @@ export class Controls {
 
   cancel(): void {
     this.attackMovePending = false;
+    this.abilityPending = -1;
     if (this.buildMode >= 0) this.exitBuildMode();
     else this.selected.clear();
   }

@@ -14,8 +14,8 @@ export class BarkFeed {
   constructor() {
     this.container = document.createElement('div');
     this.container.style.cssText =
-      'position:fixed;left:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;' +
-      'pointer-events:none;max-width:420px';
+      'position:fixed;left:12px;bottom:120px;display:flex;flex-direction:column;gap:6px;' +
+      'pointer-events:none;max-width:380px';
     document.getElementById('hud')?.appendChild(this.container);
   }
 

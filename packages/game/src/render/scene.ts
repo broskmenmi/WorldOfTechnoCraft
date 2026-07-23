@@ -17,19 +17,7 @@ import '@babylonjs/core/Meshes/thinInstanceMesh';
 import '@babylonjs/core/Culling/ray';
 import type { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { isWalkable, type WalkGrid } from '@wotc/sim';
-import { BUILDINGS_BY_ID, NODES_BY_ID } from '@wotc/data';
 import type { UnitView } from '../simHost.ts';
-
-const TEAM_COLORS: ReadonlyArray<[number, number, number]> = [
-  [0.35, 1.0, 0.55], // player 0: neon green
-  [1.0, 0.3, 0.75], // player 1: hot magenta
-  [0.75, 0.72, 0.62], // player 2: neutral bone (creeps)
-  [1.0, 0.8, 0.25], // amber (spare)
-];
-const NODE_COLORS: Record<string, [number, number, number]> = {
-  cash: [1.0, 0.85, 0.3], // The Queue: gold
-  gear: [0.7, 0.5, 0.3], // Gear crates: road-case brown
-};
 
 export interface GameScene {
   scene: Scene;
@@ -114,22 +102,12 @@ export function createGameScene(
     wallMesh.thinInstanceSetBuffer('matrix', new Float32Array(wallMats), 16, true);
   }
 
-  // Mobile units are drawn by UnitRenderer (render/units.ts) — this scene
-  // handles structures (buildings/nodes), health bars, fog, and overlays.
+  // Mobile units are drawn by UnitRenderer and structures by BuildingRenderer
+  // — this scene handles vibe bars, fog, walls, selection, and pings.
   let capacity = 0;
   const tmp = Matrix.Identity();
 
-  // Buildings: a second box batch, footprint-scaled, dimmed while building.
-  const buildingMesh = MeshBuilder.CreateBox('building', { size: 1 }, scene);
-  const buildingMat = new StandardMaterial('buildingMat', scene);
-  buildingMat.specularColor = Color3.Black();
-  buildingMat.emissiveColor = new Color3(0.12, 0.12, 0.16);
-  buildingMesh.material = buildingMat;
-  buildingMesh.thinInstanceRegisterAttribute('color', 4);
-  let bldMatrices = new Float32Array(0);
-  let bldColors = new Float32Array(0);
-
-  // Health bars: one flat batch above damaged units.
+  // Vibe bars: one flat batch above units that lost some.
   const barMesh = MeshBuilder.CreateBox('hpbar', { width: 0.9, height: 0.07, depth: 0.12 }, scene);
   const barMat = new StandardMaterial('hpbarMat', scene);
   barMat.disableLighting = true;
@@ -147,12 +125,7 @@ export function createGameScene(
       barMatrices = new Float32Array(capacity * 16);
       barColors = new Float32Array(capacity * 4);
     }
-    if (units.length * 16 > bldMatrices.length) {
-      bldMatrices = new Float32Array(units.length * 32);
-      bldColors = new Float32Array(units.length * 8);
-    }
     let bars = 0;
-    let blds = 0;
     for (const u of units) {
       // Enemies in unseen cells don't get drawn (fog is sim-authoritative).
       // (Explored-but-dark enemy BUILDINGS stay visible — classic RTS rule.)
@@ -160,35 +133,6 @@ export function createGameScene(
         const ci = Math.floor(u.x) + Math.floor(u.y) * mapCells;
         const seen = u.building || u.node ? fog[ci] !== 0 : fog[ci] === 2;
         if (!seen) continue;
-      }
-      if (u.building || u.node) {
-        const def = u.node ? NODES_BY_ID.get(u.kind) : BUILDINGS_BY_ID.get(u.kind);
-        const w = def?.w ?? 2;
-        const h = def?.h ?? 2;
-        // Nodes shrink as they deplete; buildings grow as they're built.
-        const height = u.node
-          ? 0.5 + (1.3 * u.progress) / 100
-          : u.progress < 100
-            ? 0.6 + (2.4 * u.progress) / 100
-            : 3;
-        Matrix.ScalingToRef(w * 0.92, height, h * 0.92, tmp);
-        tmp.setTranslationFromFloats(u.x, height / 2, u.y);
-        tmp.copyToArray(bldMatrices, blds * 16);
-        let r: number;
-        let g: number;
-        let b: number;
-        if (u.node) {
-          const kind = (NODES_BY_ID.get(u.kind)?.kind ?? 'gear') as 'cash' | 'gear';
-          [r, g, b] = NODE_COLORS[kind]!;
-        } else {
-          [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
-        }
-        const dim = !u.node && u.progress < 100 ? 0.35 : 0.85;
-        bldColors[blds * 4] = r * dim;
-        bldColors[blds * 4 + 1] = g * dim;
-        bldColors[blds * 4 + 2] = b * dim;
-        bldColors[blds * 4 + 3] = 1;
-        blds++;
       }
       if (!u.node && u.maxHp > 0 && u.hp < u.maxHp) {
         const frac = Math.max(0, u.hp / u.maxHp);
@@ -202,14 +146,6 @@ export function createGameScene(
         barColors[bars * 4 + 3] = 1;
         bars++;
       }
-    }
-    if (blds > 0) {
-      buildingMesh.setEnabled(true);
-      buildingMesh.thinInstanceSetBuffer('matrix', bldMatrices.subarray(0, blds * 16), 16, false);
-      buildingMesh.thinInstanceSetBuffer('color', bldColors.subarray(0, blds * 4), 4, false);
-      buildingMesh.thinInstanceCount = blds;
-    } else {
-      buildingMesh.setEnabled(false);
     }
     if (bars > 0) {
       barMesh.setEnabled(true);
@@ -321,6 +257,8 @@ export function createGameScene(
   return { scene, camera, ground, updateUnits, updateFog, updateSelection, ping };
 }
 
+const EDGE_PX = 12;
+
 function setupCameraRig(scene: Scene, camera: FreeCamera, mapCells: number): void {
   const keys = new Set<string>();
   const canvas = scene.getEngine().getRenderingCanvas();
@@ -333,6 +271,17 @@ function setupCameraRig(scene: Scene, camera: FreeCamera, mapCells: number): voi
     camera.position.z -= dir * 2.4; // keep the RTS pitch feeling constant
   });
 
+  // Edge-scroll (mouse only): pointer hugging a window edge pans the camera.
+  const pointer = { x: -1, y: -1, active: false };
+  window.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch') return;
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
+    pointer.active = true;
+  });
+  window.addEventListener('pointerleave', () => (pointer.active = false));
+  document.addEventListener('mouseleave', () => (pointer.active = false));
+
   scene.onBeforeRenderObservable.add(() => {
     const dt = scene.getEngine().getDeltaTime() / 1000;
     const speed = 28 * dt * (camera.position.y / 40 + 0.4);
@@ -343,6 +292,15 @@ function setupCameraRig(scene: Scene, camera: FreeCamera, mapCells: number): voi
     if (keys.has('ArrowDown')) dz -= speed;
     if (keys.has('ArrowLeft')) dx -= speed;
     if (keys.has('ArrowRight')) dx += speed;
+    // Edge-scroll, suppressed while a full-screen overlay is up.
+    if (pointer.active && document.body.dataset['overlay'] !== '1') {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if (pointer.x >= 0 && pointer.x < EDGE_PX) dx -= speed;
+      else if (pointer.x > w - EDGE_PX) dx += speed;
+      if (pointer.y >= 0 && pointer.y < EDGE_PX) dz += speed;
+      else if (pointer.y > h - EDGE_PX) dz -= speed;
+    }
     camera.position.x = Math.min(mapCells, Math.max(0, camera.position.x + dx));
     camera.position.z = Math.min(mapCells, Math.max(-20, camera.position.z + dz));
   });

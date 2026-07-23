@@ -49,12 +49,26 @@ export class Minimap {
       }
     }
 
-    this.canvas.addEventListener('pointerdown', (e) => {
+    // Click OR drag flies the camera (drag = continuous pan).
+    const fly = (e: PointerEvent) => {
       const rect = this.canvas.getBoundingClientRect();
       const wx = ((e.clientX - rect.left) / SIZE) * grid.w;
       const wy = ((e.clientY - rect.top) / SIZE) * grid.h;
       camera.position.x = wx;
       camera.position.z = wy - 28; // keep the RTS camera offset
+    };
+    let dragging = false;
+    this.canvas.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      this.canvas.setPointerCapture(e.pointerId);
+      fly(e);
+    });
+    this.canvas.addEventListener('pointermove', (e) => {
+      if (dragging) fly(e);
+    });
+    this.canvas.addEventListener('pointerup', (e) => {
+      dragging = false;
+      this.canvas.releasePointerCapture(e.pointerId);
     });
   }
 

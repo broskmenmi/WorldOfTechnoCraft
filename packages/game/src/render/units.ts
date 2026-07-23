@@ -1,7 +1,8 @@
 // Per-kind unit silhouettes: each kind is a merged primitive mesh drawn as a
 // thin-instance batch (one draw call per kind on screen). Facing comes from
 // frame-to-frame movement; walk-bob only while moving; idle sway on the beat.
-// Deaths become tipping, shrinking corpses instead of vanishing.
+// Nobody dies in this game: units that lose the clash rage-quit — a quick
+// spin, a huff, and they storm off toward the exit while fading out.
 
 import { Scene } from '@babylonjs/core/scene';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
@@ -135,7 +136,7 @@ interface Batch {
   count: number;
 }
 
-interface Corpse {
+interface RageQuit {
   kind: number;
   x: number;
   y: number;
@@ -144,16 +145,27 @@ interface Corpse {
   bornAt: number;
 }
 
-const CORPSE_MS = 900;
+const RAGEQUIT_MS = 1000;
+
+/** Per-kind footprint scale so sizes read at RTS zoom. */
+const KIND_SCALE: Record<number, number> = {
+  [UNITS.clubgoer.id]: 0.85,
+  [UNITS.roadie.id]: 0.85,
+  [UNITS.raver.id]: 0.8,
+  [UNITS.bouncer.id]: 1.08,
+  [UNITS.front_left_monk.id]: 1.15,
+  [UNITS.bass_cannon.id]: 1.12,
+  [UNITS.hakken_bruiser.id]: 1.22,
+  [UNITS.chief_inspector.id]: 1.18,
+};
 
 export class UnitRenderer {
   private batches = new Map<number, Batch>();
   private cargo: Batch;
-  private corpseBatch: Batch;
   private lastPose = new Map<number, { x: number; y: number; face: number }>();
   private prevAlive = new Map<number, UnitView>();
-  private corpses: Corpse[] = [];
-  /** Fired when units die (for sfx/minimap). */
+  private rageQuits: RageQuit[] = [];
+  /** Fired when a unit rage-quits or a structure shuts down (sfx/minimap). */
   onDeath: ((view: UnitView) => void) | null = null;
 
   constructor(private scene: Scene) {
@@ -162,8 +174,6 @@ export class UnitRenderer {
     }
     // Carried-resource marker: a little gold cube above workers.
     this.cargo = this.makeBatch('cargo', [{ shape: 'box', size: [0.24, 0.24, 0.24], pos: [0, 1.05, 0] }]);
-    // Generic corpse slab.
-    this.corpseBatch = this.makeBatch('corpse', [{ shape: 'box', size: [0.5, 0.16, 0.8], pos: [0, 0.08, 0] }]);
   }
 
   private makeBatch(name: string, parts: Part[]): Batch {
@@ -260,7 +270,7 @@ export class UnitRenderer {
       }
 
       Quaternion.RotationYawPitchRollToRef(pose.face, 0, sway * 0.4, q);
-      scale.setAll(u.hero ? 1.15 : 1);
+      scale.setAll(u.hero ? 1.28 : (KIND_SCALE[u.kind] ?? 1));
       trans.set(u.x, yOff, u.y);
       Matrix.ComposeToRef(scale, q, trans, tmp);
       const [r, g, b] = TEAM_COLORS[u.player % TEAM_COLORS.length]!;
@@ -273,11 +283,11 @@ export class UnitRenderer {
       }
     }
 
-    // Death detection → corpses.
+    // Vanished units rage-quit (nobody dies — they just leave, loudly).
     for (const [eid, u] of this.prevAlive) {
       if (!seen.has(eid)) {
         const pose = this.lastPose.get(eid);
-        this.corpses.push({ kind: u.kind, x: u.x, y: u.y, face: pose?.face ?? 0, player: u.player, bornAt: now });
+        this.rageQuits.push({ kind: u.kind, x: u.x, y: u.y, face: pose?.face ?? 0, player: u.player, bornAt: now });
         this.lastPose.delete(eid);
         this.onDeath?.(u);
       }
@@ -287,25 +297,30 @@ export class UnitRenderer {
       if (!u.building && !u.node) this.prevAlive.set(u.eid, u);
     }
 
-    // Corpses: tip over and sink.
-    for (let i = this.corpses.length - 1; i >= 0; i--) {
-      const c = this.corpses[i]!;
-      const age = (now - c.bornAt) / CORPSE_MS;
+    // Rage-quits: hands up, a spin, then storm off toward the exit and fade.
+    for (let i = this.rageQuits.length - 1; i >= 0; i--) {
+      const c = this.rageQuits[i]!;
+      const age = (now - c.bornAt) / RAGEQUIT_MS;
       if (age >= 1) {
-        this.corpses.splice(i, 1);
+        this.rageQuits.splice(i, 1);
         continue;
       }
-      Quaternion.RotationYawPitchRollToRef(c.face, 0, age * 1.4, q);
-      scale.set(1, Math.max(0.15, 1 - age), 1);
-      trans.set(c.x, 0.06 * (1 - age), c.y);
+      const exitX = Math.sign(c.x - 128) || 1;
+      const exitY = Math.sign(c.y - 128) || 1;
+      Quaternion.RotationYawPitchRollToRef(c.face + age * 7, 0, 0, q);
+      const shrink = Math.max(0.1, 1 - age * 0.9);
+      // A brief indignant stretch before the shrink: peak at ~15% in.
+      const huff = age < 0.15 ? 1 + age * 2 : 1;
+      scale.set(shrink, shrink * huff, shrink);
+      trans.set(c.x + exitX * age * 1.6, 0, c.y + exitY * age * 1.6);
       Matrix.ComposeToRef(scale, q, trans, tmp);
+      const batch = this.batches.get(c.kind) ?? this.batches.get(UNITS.raver.id)!;
       const [r, g, b] = TEAM_COLORS[c.player % TEAM_COLORS.length]!;
-      const dim = 0.5 * (1 - age) + 0.1;
-      this.push(this.corpseBatch, tmp, r * dim, g * dim, b * dim);
+      const dim = 0.6 * (1 - age) + 0.1;
+      this.push(batch, tmp, r * dim, g * dim, b * dim);
     }
 
     for (const batch of this.batches.values()) this.flush(batch);
     this.flush(this.cargo);
-    this.flush(this.corpseBatch);
   }
 }
