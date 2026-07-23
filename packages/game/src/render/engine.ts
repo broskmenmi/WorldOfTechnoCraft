@@ -4,6 +4,13 @@
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { WebGPUEngine } from '@babylonjs/core/Engines/webgpuEngine';
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
+// WebGPU engine extensions are tree-shaken side-effect modules: without these
+// imports, DynamicTexture (floor), RawTexture (fog), and alpha-blended
+// materials (lasers/ghost) throw "createX is not a function" ONLY on the
+// WebGPU path — the game boots to a black screen while WebGL2 works fine.
+import '@babylonjs/core/Engines/WebGPU/Extensions/engine.dynamicTexture';
+import '@babylonjs/core/Engines/WebGPU/Extensions/engine.rawTexture';
+import '@babylonjs/core/Engines/WebGPU/Extensions/engine.alpha';
 
 export interface BootedEngine {
   engine: AbstractEngine;
